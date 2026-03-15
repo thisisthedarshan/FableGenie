@@ -160,7 +160,8 @@ fable-genie/
 git clone https://github.com/thisisthedarshan/FableGenie.git
 cd FableGenie
 cp .env.example .env
-# Fill in your values (see Environment Variables below)
+# Run this to auth locally (ADC):
+gcloud auth application-default login
 cd backend && npm install
 ```
 

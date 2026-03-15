@@ -1,18 +1,24 @@
-const { GoogleGenAI } = require('@google/genai');
+const { VertexAI } = require('@google-cloud/vertexai');
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const vertexAI = new VertexAI({
+  project: process.env.GOOGLE_CLOUD_PROJECT,
+  location: process.env.VERTEX_AI_LOCATION,
+});
+
 const MODEL_NAME = 'gemini-2.5-pro-preview-06-05';
 
 class GeminiProSession {
   constructor(systemPrompt) {
     this.systemPrompt = systemPrompt;
-    this.chatSession = ai.chats.create({
+    const generativeModel = vertexAI.getGenerativeModel({
       model: MODEL_NAME,
-      config: {
-        systemInstruction: systemPrompt,
-        temperature: 0.7, // Add some creativity to the fable
+      systemInstruction: systemPrompt,
+      generationConfig: {
+        temperature: 0.7,
       }
     });
+    // Start chat session with no initial history
+    this.chatSession = generativeModel.startChat({});
     this.onChunkCallback = null;
   }
 

@@ -1,6 +1,9 @@
-const { GoogleGenAI } = require('@google/genai');
+const { VertexAI } = require('@google-cloud/vertexai');
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const vertexAI = new VertexAI({
+  project: process.env.GOOGLE_CLOUD_PROJECT,
+  location: process.env.VERTEX_AI_LOCATION,
+});
 const MODEL_NAME = 'gemini-2.5-flash-preview-tts';
 
 class TTSPipeline {
@@ -62,15 +65,15 @@ class TTSPipeline {
       const prefix = stylePrefixMap[toSynthesize.phase] || '[speak slowly and warmly]';
       const prompt = `${prefix} ${toSynthesize.text}`;
       
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt
+      const model = vertexAI.getGenerativeModel({ model: MODEL_NAME });
+      const response = await model.generateContent({
+        contents: [{role: 'user', parts: [{text: prompt}]}]
       });
 
       // Extract raw audio data (Base64) from the response parts
       let inlineData = null;
-      if (response.candidates && response.candidates[0].content.parts) {
-         const parts = response.candidates[0].content.parts;
+      if (response && response.response && response.response.candidates && response.response.candidates[0].content.parts) {
+         const parts = response.response.candidates[0].content.parts;
          const audioPart = parts.find(p => p.inlineData && p.inlineData.data);
          if (audioPart) {
              inlineData = audioPart.inlineData.data;

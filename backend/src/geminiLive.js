@@ -1,6 +1,11 @@
 const { GoogleGenAI } = require('@google/genai');
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI({ 
+  vertexai: {
+    project: process.env.GOOGLE_CLOUD_PROJECT,
+    location: process.env.VERTEX_AI_LOCATION
+  }
+});
 const MODEL_NAME = 'gemini-2.5-flash-preview-native-audio-dialog';
 
 class GeminiLiveSession {

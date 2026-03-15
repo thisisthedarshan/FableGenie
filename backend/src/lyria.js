@@ -1,6 +1,10 @@
-const { GoogleGenAI } = require('@google/genai');
+const { VertexAI } = require('@google-cloud/vertexai');
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const vertexAI = new VertexAI({
+  project: process.env.GOOGLE_CLOUD_PROJECT,
+  location: process.env.VERTEX_AI_LOCATION,
+});
+
 const MODEL_NAME = 'lyria-realtime-exp';
 
 class LyriaStream {
@@ -13,10 +17,8 @@ class LyriaStream {
   async open() {
     console.log('[Lyria] Opening persistent ambient stream...');
     try {
-      this.session = await ai.chats.create({
-        model: MODEL_NAME,
-        // Hypothetical stream init config based on prompt
-      });
+      const generativeModel = vertexAI.getGenerativeModel({ model: MODEL_NAME });
+      this.session = generativeModel.startChat({});
       this.isOpen = true;
       // Start streaming loop here if the SDK requires pulling
     } catch (e) {
@@ -33,13 +35,10 @@ class LyriaStream {
     
     console.log(`[Lyria] Steering continuous stream to mood: ${mood}`);
     try {
-       const response = await this.session.sendMessage({
-           // Sending weighted text prompt array
-           parts: [{text: `Ambient, cinematic, ${mood} background loop, entirely instrumental`}]
-       });
+       const response = await this.session.sendMessage([{text: `Ambient, cinematic, ${mood} background loop, entirely instrumental`}]);
        
-       if (response.candidates && response.candidates[0].content.parts) {
-            const parts = response.candidates[0].content.parts;
+       if (response && response.response && response.response.candidates && response.response.candidates[0].content.parts) {
+            const parts = response.response.candidates[0].content.parts;
             // Scan for raw PCM audio chunks returned inline
             const audioPart = parts.find(p => p.inlineData && p.inlineData.mimeType.includes('audio/pcm'));
             if (audioPart) {

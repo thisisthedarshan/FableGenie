@@ -20,6 +20,7 @@
   "homepage": "https://github.com/thisisthedarshan/FableGenie#readme",
   "dependencies": {
     "@google-cloud/storage": "^7.19.0",
+    "@google-cloud/vertexai": "^1.10.0",
     "@google/genai": "^1.45.0",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
