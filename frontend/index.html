@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FableGenie - AI Generative Stories</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital@0;1&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Setup Screen (Phase 0) -->
+    <section id="setup-screen" class="active">
+      <div class="glass-panel">
+        <h1>What kind of story shall I tell you?</h1>
+        
+        <button id="btn-voice-setup" class="primary-btn pulse">
+           <span class="icon">🎙</span> Tell me your idea
+        </button>
+        <div id="voice-status" class="hidden">Listening...</div>
+        
+        <div class="divider">
+          <span>or choose below</span>
+        </div>
+
+        <div class="form-group">
+          <label>Setting:</label>
+          <select id="select-setting">
+            <option value="african-savanna">African savanna</option>
+            <option value="ancient-greece">Ancient Greece</option>
+            <option value="enchanted-forest">Enchanted forest</option>
+            <option value="feudal-japan">Feudal Japan</option>
+            <option value="arctic-tundra">Arctic tundra</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Moral theme:</label>
+          <select id="select-moral">
+            <option value="trust">Trust</option>
+            <option value="courage">Courage</option>
+            <option value="wisdom">Wisdom</option>
+            <option value="kindness">Kindness</option>
+            <option value="patience">Patience</option>
+          </select>
+        </div>
+
+        <button id="btn-ui-setup" class="secondary-btn">Begin the fable →</button>
+      </div>
+    </section>
+
+    <!-- Theater Mode -->
+    <section id="theater-mode">
+      <div id="image-container"></div>
+      <video id="video-container" loop muted playsinline class="hidden"></video>
+      
+      <div id="micro-moment-bubble" class="hidden">
+        <p id="micro-moment-text"></p>
+      </div>
+
+      <div id="gesture-overlay" class="hidden">
+        <div class="gesture-instructions glass-panel">
+          <h2>Make your choice!</h2>
+          <div class="gesture-choices">
+            <div class="choice" onclick="sendMockGesture('trust')">
+               <span class="icon">🖐️</span>
+               <p>Open Palm: Trust</p>
+            </div>
+            <div class="choice" onclick="sendMockGesture('run_away')">
+               <span class="icon">🙅</span>
+               <p>Cross Arms: Run Away</p>
+            </div>
+          </div>
+          <p class="small">*Using mock UI clicks for demo fallback*</p>
+        </div>
+      </div>
+      
+      <video id="webcam-preview" autoplay playsinline muted class="hidden"></video>
+    </section>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

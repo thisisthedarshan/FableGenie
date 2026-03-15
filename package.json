@@ -1,0 +1,28 @@
+{
+  "name": "fablegenie",
+  "version": "1.0.0",
+  "description": "> Talk to it. Interrupt it. Gesture at it. Every story is generated fresh — no two are ever the same.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thisisthedarshan/FableGenie.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/thisisthedarshan/FableGenie/issues"
+  },
+  "homepage": "https://github.com/thisisthedarshan/FableGenie#readme",
+  "dependencies": {
+    "@google-cloud/storage": "^7.19.0",
+    "@google/genai": "^1.45.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "ws": "^8.19.0"
+  }
+}
