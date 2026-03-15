@@ -1,0 +1,53 @@
+<svg width="100%" viewBox="0 0 680 415" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <!-- Google Cloud container -->
+  <rect x="210" y="18" width="448" height="345" rx="12" fill="none" stroke="#888" stroke-width="1" stroke-dasharray="6 3"/>
+  <text font-size="11" x="434" y="36" text-anchor="middle" fill="#888">Google Cloud (Cloud Run · Vertex AI)</text>
+  <!-- Browser -->
+  <rect x="22" y="168" width="142" height="60" rx="8" fill="#F1EFE8" stroke="#888780" stroke-width="0.5"/>
+  <text font-size="13" font-weight="500" x="93" y="192" text-anchor="middle">Browser</text>
+  <text font-size="11" x="93" y="212" text-anchor="middle" fill="#5F5E5A">WebRTC · webcam · mic</text>
+  <!-- Arrow Browser to Cloud Run -->
+  <line x1="164" y1="198" x2="226" y2="190" stroke="#888" stroke-width="1" marker-end="url(#arrow)"/>
+  <!-- Cloud Run -->
+  <rect x="228" y="155" width="158" height="68" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+  <text font-size="13" font-weight="500" x="307" y="179" text-anchor="middle">Cloud Run</text>
+  <text font-size="11" x="307" y="197" text-anchor="middle" fill="#534AB7">Node.js · stream parser</text>
+  <text font-size="11" x="307" y="213" text-anchor="middle" fill="#534AB7">Session state · router</text>
+  <!-- Fan arrows Cloud Run to models -->
+  <line x1="386" y1="189" x2="442" y2="67"  stroke="#888" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="386" y1="189" x2="442" y2="129" stroke="#888" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="386" y1="189" x2="442" y2="191" stroke="#888" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="386" y1="189" x2="442" y2="253" stroke="#888" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="386" y1="189" x2="442" y2="315" stroke="#888" stroke-width="1" marker-end="url(#arrow)"/>
+  <!-- Gemini 2.5 Flash Live -->
+  <rect x="444" y="44"  width="198" height="46" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text font-size="13" font-weight="500" x="543" y="64"  text-anchor="middle">Gemini 2.5 Flash Live</text>
+  <text font-size="11" x="543" y="81"  text-anchor="middle" fill="#0F6E56">Setup · greeting · gesture</text>
+  <!-- Gemini 2.5 Pro -->
+  <rect x="444" y="106" width="198" height="46" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text font-size="13" font-weight="500" x="543" y="126" text-anchor="middle">Gemini 2.5 Pro</text>
+  <text font-size="11" x="543" y="143" text-anchor="middle" fill="#0F6E56">Narrative · interleaved output</text>
+  <!-- Imagen 4 -->
+  <rect x="444" y="168" width="198" height="46" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text font-size="13" font-weight="500" x="543" y="188" text-anchor="middle">Imagen 4</text>
+  <text font-size="11" x="543" y="205" text-anchor="middle" fill="#0F6E56">Inline scene illustration</text>
+  <!-- Gemini 2.5 Flash TTS -->
+  <rect x="444" y="230" width="198" height="46" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text font-size="13" font-weight="500" x="543" y="250" text-anchor="middle">Gemini 2.5 Flash TTS</text>
+  <text font-size="11" x="543" y="267" text-anchor="middle" fill="#0F6E56">Narration audio</text>
+  <!-- Lyria -->
+  <rect x="444" y="292" width="198" height="46" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+  <text font-size="13" font-weight="500" x="543" y="312" text-anchor="middle">Lyria</text>
+  <text font-size="11" x="543" y="329" text-anchor="middle" fill="#0F6E56">Background music</text>
+  <!-- Cloud Run to GCS -->
+  <line x1="307" y1="223" x2="307" y2="295" stroke="#888" stroke-width="1" marker-end="url(#arrow)"/>
+  <!-- Cloud Storage -->
+  <rect x="228" y="297" width="158" height="48" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+  <text font-size="13" font-weight="500" x="307" y="317" text-anchor="middle">Cloud Storage</text>
+  <text font-size="11" x="307" y="334" text-anchor="middle" fill="#3B6D11">Veo assets · video cache</text>
+</svg>
