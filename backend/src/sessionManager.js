@@ -209,6 +209,7 @@ async function startVoiceSetup(session) {
       if (typeof rawText !== 'string') return;
 
       const params = extractStoryParams(rawText);
+      console.log(`[SessionManager] Setup output received (${rawText.length} chars)`);
       if (params) {
         console.log('[SessionManager] Story params extracted from voice:', params);
         session.storyParams = params;
@@ -223,6 +224,10 @@ async function startVoiceSetup(session) {
       if (spokenText) {
         await session.ttsQueue.enqueue(spokenText, 'setup');
       }
+    });
+
+    session.liveSession.onAudio((base64) => {
+      session.socket.send(JSON.stringify({ type: 'live_audio', data: base64 }));
     });
   } catch (e) {
     console.error('[SessionManager] Voice setup failed:', e.message);
@@ -293,6 +298,10 @@ Never speak the observation tag.
     if (spokenText) {
       await session.ttsQueue.enqueue(spokenText, 'greeting');
     }
+  });
+
+  session.liveSession.onAudio((base64) => {
+    session.socket.send(JSON.stringify({ type: 'live_audio', data: base64 }));
   });
 
   // FIX 3: Use onTurnComplete to know when the greeting is DONE.

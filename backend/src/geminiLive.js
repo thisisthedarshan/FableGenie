@@ -40,11 +40,6 @@ class GeminiLiveSession {
           model: MODEL_NAME,
           config: {
             systemInstruction: { parts: [{ text: this.systemPrompt }] },
-            // Force text responses. The native audio model defaults to audio
-            // output — parts arrive as binary blobs with no .text property,
-            // so observation/params extraction silently produces nothing.
-            // TEXT mode gives us strings we can actually parse.
-            responseModalities: ['TEXT']
           },
           callbacks: {
             onmessage: (message) => {
@@ -59,28 +54,25 @@ class GeminiLiveSession {
                 const modelTurn = message.serverContent.modelTurn;
 
                 if (modelTurn && modelTurn.parts && modelTurn.parts.length > 0) {
-                  // FIX 2: Only pass TEXT to onOutputCallback — never arrays.
-                  // When Gemini responds with audio, parts have no .text property.
-                  // Passing the parts array caused rawText.match() to throw TypeError
-                  // silently in the async callbacks in sessionManager.js.
-                  const text = modelTurn.parts
-                    .map(p => p.text)
-                    .filter(Boolean)
-                    .join('');
-
-                  if (text) {
-                    console.log(`[GeminiLive] Text received: "${text.substring(0, 80)}..."`);
-                    if (this.onOutputCallback) {
-                      this.onOutputCallback(text);
+                  let textAccumulated = '';
+                  
+                  for (const part of modelTurn.parts) {
+                    if (part.text) {
+                      textAccumulated += part.text;
+                    }
+                    if (part.inlineData && this.onAudioCallback) {
+                       this.onAudioCallback(part.inlineData.data);
                     }
                   }
-                  // Non-text parts (audio) are intentionally ignored here.
-                  // Audio output from the Live API requires separate audio stream
-                  // handling which is not implemented in this version.
+
+                  if (textAccumulated) {
+                    console.log(`[GeminiLive] Text received: "${textAccumulated.substring(0, 80)}..."`);
+                    if (this.onOutputCallback) {
+                      this.onOutputCallback(textAccumulated);
+                    }
+                  }
                 }
 
-                // FIX 3: Emit turnComplete when Gemini finishes a full response.
-                // This replaces the unreliable rawText.length > 50 heuristic.
                 if (message.serverContent.turnComplete) {
                   console.log('[GeminiLive] Turn complete');
                   if (this.onTurnCompleteCallback) {
@@ -98,15 +90,17 @@ class GeminiLiveSession {
               }
             },
 
-            onclose: () => {
+            onclose: (event) => {
+              const code = event?.code || 'unknown';
+              const reason = event?.reason || 'no reason';
               if (this._intentionalClose) {
-                console.log('[GeminiLive] Session closed (intentional)');
+                console.log(`[GeminiLive] Session closed (intentional) - Code: ${code}`);
               } else {
-                console.warn('[GeminiLive] Session closed unexpectedly');
+                console.warn(`[GeminiLive] Session closed unexpectedly - Code: ${code}, Reason: ${reason}`);
               }
               if (!setupResolved) {
                 setupResolved = true;
-                reject(new Error('Gemini Live session closed before setupComplete'));
+                reject(new Error(`Gemini Live session closed before setupComplete (Code: ${code})`));
               }
             }
           }
@@ -123,6 +117,11 @@ class GeminiLiveSession {
   // Register callback for text output chunks
   onOutput(callback) {
     this.onOutputCallback = callback;
+  }
+
+  // Register callback for audio output chunks (base64)
+  onAudio(callback) {
+    this.onAudioCallback = callback;
   }
 
   // Register callback for when a full response turn is complete

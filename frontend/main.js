@@ -139,6 +139,11 @@ function connect() {
         if (gestureOverlay) gestureOverlay.classList.add('hidden');
         break;
 
+      case 'live_audio':
+        // Direct audio from Gemini Live native-audio model
+        playLiveAudioPCM(msg.data);
+        break;
+
       default:
         console.log('[WS] Unknown message type:', msg.type);
     }
@@ -270,6 +275,55 @@ function playLyriaPCM(base64Data) {
     lyriaAudioSource.start(audioContext.currentTime + 0.5);
   } catch (e) {
     console.error('[Lyria] PCM playback error:', e);
+  }
+}
+
+// ─── Gemini Live Audio Playback (Native Audio) ───────────────────────────────
+
+function playLiveAudioPCM(base64Data) {
+  if (audioContext.state === 'suspended') audioContext.resume();
+
+  try {
+    const binaryStr = atob(base64Data);
+    const buffer = new ArrayBuffer(binaryStr.length);
+    const view = new DataView(buffer);
+    for (let i = 0; i < binaryStr.length; i++) {
+        view.setUint8(i, binaryStr.charCodeAt(i));
+    }
+
+    const int16Array = new Int16Array(buffer);
+    const float32Array = new Float32Array(int16Array.length);
+    for (let i = 0; i < int16Array.length; i++) {
+        float32Array[i] = int16Array[i] / 32768.0;
+    }
+
+    const sampleRate = 48000; // Gemini Live native-audio model often uses 24kHz or 48kHz. 24000 is common for Live.
+    // However, some variants use 24k. test-genai.js detected it. 
+    // Let's use 24000 as default or check if we can pass it from server.
+    const actualRate = 24000; 
+    const audioBuffer = audioContext.createBuffer(1, float32Array.length, actualRate);
+    audioBuffer.getChannelData(0).set(float32Array);
+
+    const source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioContext.destination);
+
+    // Schedule playback sequentially for smooth audio
+    const now = audioContext.currentTime;
+    const playAt = Math.max(now, nextPlayTime);
+    source.start(playAt);
+    nextPlayTime = playAt + audioBuffer.duration;
+    
+    // Animate mouth
+    const host = document.getElementById('ai-host-container');
+    if (host) host.classList.add('speaking');
+    source.onended = () => {
+        if (audioContext.currentTime >= nextPlayTime - 0.1) {
+           if (host) host.classList.remove('speaking');
+        }
+    };
+  } catch (e) {
+    console.error('[LiveAudio] Playback error:', e);
   }
 }
 
