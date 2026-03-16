@@ -107,9 +107,15 @@ function connect() {
         if (narrationStarted) {
           narrationStarted = false; // only do this once
           const host = document.getElementById('ai-host-container');
-          if (host && !host.classList.contains('hidden')) {
+          if (host && host.classList.contains('visible')) {
+            console.log('[UI] Narration audio started — fading out host');
             host.classList.remove('visible');
-            setTimeout(() => host.classList.add('hidden'), 1000);
+            // Wait for opacity transition (1s in CSS) then hide from layout
+            setTimeout(() => {
+              if (!host.classList.contains('visible')) {
+                host.classList.add('hidden');
+              }
+            }, 1000);
           }
         }
         // Pass mimeType so decoder knows if it's raw PCM or encoded audio

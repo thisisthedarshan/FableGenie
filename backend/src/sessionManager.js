@@ -290,6 +290,30 @@ async function transitionToGreeting(session) {
   session.phase = 'greeting';
   session._greetingNarrationScheduled = false;
 
+  // ── FIX: Trigger UI transition & Background Image Generation immediately ──
+  // This ensures the theater mode is ready while the host is greeting.
+  session.socket.send(JSON.stringify({ type: 'setup_ready' }));
+
+  if (session.storyParams) {
+    const settingDesc = session.storyParams.setting || 'magical world';
+    const firstScenePrompt = `Opening scene from a ${settingDesc} fable, establishing shot, warm golden light`;
+    setImmediate(async () => {
+      try {
+        console.log('[SessionManager] Pre-generating first story image during greeting...');
+        const base64 = await imagen.generateImage(firstScenePrompt);
+        if (base64) {
+          console.log('[SessionManager] First image ready — storing for narration start');
+          session.storyImages.push(base64);
+          session.lastImagenCallTime = Date.now();
+          // Send immediately so theater mode isn't blank during greeting
+          session.socket.send(JSON.stringify({ type: 'image', data: base64 }));
+        }
+      } catch (e) {
+        console.warn('[SessionManager] Pre-generation failed (non-fatal):', e.message);
+      }
+    });
+  }
+
   const settingLabel = session.storyParams?.setting || 'a magical world';
   const moralLabel = session.storyParams?.moral || 'an important lesson';
 
@@ -374,9 +398,6 @@ Do not mention AI, cameras, machine learning, or technology.
     }
     greetingDone = true;
 
-    // Send setup_ready — greeting audio is done, theater mode can show
-    session.socket.send(JSON.stringify({ type: 'setup_ready' }));
-
     console.log('[Phase1] Greeting turnComplete fired');
     console.log('[Phase1] Scheduling narration in 3s...');
     setTimeout(() => {
@@ -404,28 +425,6 @@ Do not mention AI, cameras, machine learning, or technology.
     console.error('[SessionManager] Greeting session init failed:', e.message);
     await startNarration(session);
     return;
-  }
-
-  // Pre-generate first image during greeting — runs in parallel with greeting audio
-  if (session.storyParams) {
-    const settingDesc = session.storyParams.setting || 'magical world';
-    const firstScenePrompt = `Opening scene from a ${settingDesc} fable, establishing shot, warm golden light`;
-    setImmediate(async () => {
-      try {
-        console.log('[SessionManager] Pre-generating first story image during greeting...');
-        const base64 = await imagen.generateImage(firstScenePrompt);
-        if (base64) {
-          console.log('[SessionManager] First image ready — sending to client immediately');
-          // Send directly regardless of phase — narration may have already started
-          // but the image is still welcome on screen
-          session.storyImages.push(base64);
-          session.lastImagenCallTime = Date.now();
-          socket.send(JSON.stringify({ type: 'image', data: base64 }));
-        }
-      } catch (e) {
-        console.warn('[SessionManager] Pre-generation failed (non-fatal):', e.message);
-      }
-    });
   }
 
   // Trigger the greeting
