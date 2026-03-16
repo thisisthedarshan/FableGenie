@@ -11,7 +11,7 @@ function getVertexAI() {
   return vertexAI;
 }
 
-const MODEL_NAME = 'gemini-1.5-pro-002'; // Using a stable model name for Vertex AI
+const MODEL_NAME = 'gemini-2.5-pro'; // User requested gemini-2.5-pro
 
 class GeminiProSession {
   constructor(systemPrompt) {

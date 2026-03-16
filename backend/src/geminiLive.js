@@ -35,6 +35,13 @@ class GeminiLiveSession {
     return new Promise(async (resolve, reject) => {
       let setupResolved = false;
 
+      const timeout = setTimeout(() => {
+        if (!setupResolved) {
+          setupResolved = true;
+          reject(new Error('Gemini Live initialization timed out after 15s'));
+        }
+      }, 15000);
+
       try {
         this.session = await getAi().live.connect({
           model: MODEL_NAME,
@@ -46,6 +53,7 @@ class GeminiLiveSession {
               // Resolve the initialize() promise only when Gemini confirms ready
               if (!setupResolved && message.setupComplete) {
                 setupResolved = true;
+                clearTimeout(timeout);
                 console.log('[GeminiLive] Live session ready (setupComplete received)');
                 resolve();
               }
@@ -93,14 +101,22 @@ class GeminiLiveSession {
             onclose: (event) => {
               const code = event?.code || 'unknown';
               const reason = event?.reason || 'no reason';
-              if (this._intentionalClose) {
-                console.log(`[GeminiLive] Session closed (intentional) - Code: ${code}`);
+              
+              const isClean = (code === 1000 || this._intentionalClose);
+              
+              if (isClean) {
+                console.log(`[GeminiLive] Session closed cleanly - Code: ${code}`);
               } else {
                 console.warn(`[GeminiLive] Session closed unexpectedly - Code: ${code}, Reason: ${reason}`);
               }
+
               if (!setupResolved) {
                 setupResolved = true;
-                reject(new Error(`Gemini Live session closed before setupComplete (Code: ${code})`));
+                if (isClean) {
+                  resolve(); // Resolve instead of rejecting for clean closure during init
+                } else {
+                  reject(new Error(`Gemini Live session closed unexpectedly (Code: ${code})`));
+                }
               }
             }
           }
@@ -185,6 +201,19 @@ class GeminiLiveSession {
       }]);
     } catch (e) {
       console.error('[GeminiLive] sendVideo error:', e.message);
+    }
+  }
+
+  async sendImage(base64Jpeg) {
+    if (!this.session) return;
+    try {
+      console.log('[GeminiLive] Sending webcam snapshot...');
+      await this.session.sendRealtimeInput([{
+        mimeType: 'image/jpeg',
+        data: base64Jpeg
+      }]);
+    } catch (e) {
+      console.error('[GeminiLive] sendImage error:', e.message);
     }
   }
 

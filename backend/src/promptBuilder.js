@@ -4,6 +4,7 @@ const SETTING_DEFAULTS = {
   'enchanted-forest': 'an enchanted forest where animals speak and magic is ordinary',
   'feudal-japan': 'feudal Japan with bamboo forests, wandering samurai, and wise monks',
   'arctic-tundra': 'the frozen Arctic where survival teaches every lesson',
+  'medieval-kingdom': 'a medieval kingdom of stone castles, brave knights, and fire-breathing dragons',
   'aesops-fables': 'the world of Aesop\'s Fables, with clever foxes, slow tortoises, and lessons in every corner',
   'panchatantra': 'the lush jungles and royal courts of the Panchatantra, where animals outwit each other with strategy and wisdom',
 
@@ -67,7 +68,7 @@ const MORAL_DEFAULTS = {
   'generosity': 'what we give away freely always comes back multiplied',
 };
 
-function buildSystemPrompt({ setting, moral, userIdea, userName }) {
+function buildSystemPrompt({ setting, moral, userIdea, userName, ageGroup, viewerCount }) {
   const storyBrief = userIdea
     ? `Create an original fable inspired by this idea: "${userIdea}".
        The story should naturally teach a moral lesson through its events.`
@@ -78,10 +79,20 @@ function buildSystemPrompt({ setting, moral, userIdea, userName }) {
     ? `The user's name is ${userName}. Weave it in naturally once.`
     : '';
 
+  // Audience adjustments
+  let audienceTone = 'children aged 6–12';
+  if (ageGroup === 'young child 4-7') audienceTone = 'young children aged 4–7 (use simpler vocabulary, shorter sentences, very clear emotions)';
+  if (ageGroup === 'teen 13+') audienceTone = 'teenagers (allow more complex themes, deeper metaphors)';
+  
+  const pluralClause = (viewerCount > 1) 
+    ? 'Address your listeners as "you and your friends".' 
+    : 'Address your listener as "you".';
+
   return `
-You are FableGenie, a master storyteller for children aged 6–12.
+You are FableGenie, a master storyteller for ${audienceTone}.
 ${storyBrief}
 ${nameClause}
+${pluralClause}
 
 Create vivid, age-appropriate characters. Build dramatic tension naturally.
 Use rich sensory language — what the characters see, hear, smell, feel.

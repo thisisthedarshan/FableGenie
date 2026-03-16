@@ -1,30 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FableGenie - AI Generative Stories</title>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital@0;1&display=swap" rel="stylesheet">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&family=Playfair+Display:ital@0;1&display=swap"
+    rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:,">
 </head>
+
 <body>
   <div id="app">
     <!-- Setup Screen (Phase 0) -->
     <section id="setup-screen" class="active">
       <div class="glass-panel">
         <h1>What kind of story shall I tell you?</h1>
-        
+
         <button id="btn-voice-setup" class="primary-btn pulse">
-           <span class="icon">🎙</span> Tell me your idea
+          <span class="icon">🎙</span> Tell me your idea
         </button>
         <div id="voice-status" class="hidden">Listening...</div>
-        
+
         <div class="divider">
           <span>or choose below</span>
         </div>
 
         <div class="form-group">
-          <label>Setting:</label>
+          <label>Setting: <span class="dice-icon" onclick="randomizeSelect('select-setting')">🎲</span></label>
           <select id="select-setting">
             <option value="random">🎲 Randomize</option>
             <optgroup label="Core Settings">
@@ -33,6 +38,7 @@
               <option value="enchanted-forest">Enchanted Forest</option>
               <option value="feudal-japan">Feudal Japan</option>
               <option value="arctic-tundra">Arctic Tundra</option>
+              <option value="medieval-kingdom">Medieval Kingdom</option>
             </optgroup>
             <optgroup label="Classics">
               <option value="aesops-fables">Aesop's Fables</option>
@@ -75,7 +81,7 @@
         </div>
 
         <div class="form-group">
-          <label>Moral theme:</label>
+          <label>Moral theme: <span class="dice-icon" onclick="randomizeSelect('select-moral')">🎲</span></label>
           <select id="select-moral">
             <option value="random">🎲 Randomize</option>
             <option value="trust">Trust</option>
@@ -108,15 +114,21 @@
     <section id="theater-mode">
       <div id="image-container"></div>
       <video id="video-container" loop muted playsinline class="hidden"></video>
-      
-      <!-- AI Host / Genie Visual -->
-      <div id="ai-host-container" class="hidden">
-        <div class="genie-avatar">
-          <div class="genie-eyes"></div>
-          <div class="genie-mouth"></div>
-        </div>
+
+      <!-- AI Host / Genie Visual
+           NOTE: do NOT add class="hidden" here.
+           .hidden { display:none !important } would permanently block the
+           .visible opacity transition. The CSS already starts it invisible
+           via opacity:0 in the base #ai-host-container rule. -->
+      <div id="ai-host-container">
+        <!-- Replace host.png with your Imagen-generated watercolor host image.
+             The SVG data-uri below is a placeholder that renders a stylised
+             watercolor-style female host with glasses. -->
+        <img class="host-image" src="assets/host/host.png"
+          onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMDAgMjUwIj48ZGVmcz48cmFkaWFsR3JhZGllbnQgaWQ9ImJnIiBjeD0iNTAlIiBjeT0iNDAlIiByPSI2MCUiPjxzdG9wIG9mZnNldD0iMCUiIHN0b3AtY29sb3I9IiNmY2U0ZWMiLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiNmOGJiZDkiLz48L3JhZGlhbEdyYWRpZW50PjwvZGVmcz48ZWxsaXBzZSBjeD0iMTAwIiBjeT0iMTIwIiByeD0iNjUiIHJ5PSI4MCIgZmlsbD0idXJsKCNiZykiIG9wYWNpdHk9IjAuOSIvPjxlbGxpcHNlIGN4PSIxMDAiIGN5PSI4NSIgcng9IjQ1IiByeT0iNTAiIGZpbGw9IiNmZmRkYjQiIG9wYWNpdHk9IjAuOSIvPjxlbGxpcHNlIGN4PSI4MiIgY3k9IjgwIiByeD0iMTIiIHJ5PSI3IiBmaWxsPSIjNTU1IiBvcGFjaXR5PSIwLjciLz48ZWxsaXBzZSBjeD0iMTE4IiBjeT0iODAiIHJ4PSIxMiIgcnk9IjciIGZpbGw9IiM1NTUiIG9wYWNpdHk9IjAuNyIvPjxlbGxpcHNlIGN4PSI4MiIgY3k9IjgwIiByeD0iNSIgcnk9IjUiIGZpbGw9IiMzMzMiLz48ZWxsaXBzZSBjeD0iMTE4IiBjeT0iODAiIHJ4PSI1IiByeT0iNSIgZmlsbD0iIzMzMyIvPjxwYXRoIGQ9Ik04OCAxMDAgUTEwMCAxMTIgMTEyIDEwMCIgc3Ryb2tlPSIjYzA2MDgwIiBzdHJva2Utd2lkdGg9IjIuNSIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PHBhdGggZD0iTTYwIDcwIFE2NCA1MCA4MCA0OCBRIDE0MCA0MiAxNDAgNzAiIHN0cm9rZT0iIzMzMiIgc3Ryb2tlLXdpZHRoPSIzIiBmaWxsPSJub25lIiBvcGFjaXR5PSIwLjYiLz48cGF0aCBkPSJNNzAgMTMwIFE4NSAxNTAgMTAwIDE1NSBRMTE1IDE1MCAxMzAgMTMwIFExNTUgMTYwIDE1MCAxOTAgUTEyMCAyMTAgMTAwIDIxMCBRODAgMjEwIDUwIDE5MCBRIDQ1IDE2MCA3MCAxMzAiIGZpbGw9IiM4YjVjZjYiIG9wYWNpdHk9IjAuNyIvPjx0ZXh0IHg9IjEwMCIgeT0iMjQwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE0IiBmaWxsPSIjZmZmIiBvcGFjaXR5PSIwLjgiPkZhYmxlR2VuaWU8L3RleHQ+PC9zdmc+'"
+          alt="FableGenie Host" style="width:100%;height:100%;object-fit:contain;border-radius:50%;">
       </div>
-      
+
       <div id="micro-moment-bubble" class="hidden">
         <p id="micro-moment-text"></p>
       </div>
@@ -125,23 +137,24 @@
         <div class="gesture-instructions glass-panel">
           <h2>Make your choice!</h2>
           <div class="gesture-choices">
-            <div class="choice" onclick="sendMockGesture('trust')">
-               <span class="icon">🖐️</span>
-               <p>Open Palm: Trust</p>
+            <div class="choice" id="choice-trust">
+              <span class="icon">🖐️</span>
+              <p>Open Palm<br><small>Trust</small></p>
             </div>
-            <div class="choice" onclick="sendMockGesture('run_away')">
-               <span class="icon">🙅</span>
-               <p>Cross Arms: Run Away</p>
+            <div class="choice" id="choice-run">
+              <span class="icon">🙅</span>
+              <p>Cross Arms<br><small>Run Away</small></p>
             </div>
           </div>
-          <p class="small">*Using mock UI clicks for demo fallback*</p>
+          <p class="small">Show your gesture to the camera</p>
         </div>
       </div>
-      
+
       <video id="webcam-preview" autoplay playsinline muted class="hidden"></video>
     </section>
   </div>
 
   <script src="main.js"></script>
 </body>
+
 </html>

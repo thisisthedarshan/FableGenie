@@ -9,8 +9,11 @@ const imagen = require('./imagen');
 const lyria = require('./lyria');
 const gcs = require('./gcs');
 
-const PARAMS_RE = /<!--STORY_PARAMS:(.+?)-->/s;
 const OBSERVATION_RE = /<!--OBSERVATION:\s*(.+?)-->/;
+const PARAMS_RE = /<!--STORY_PARAMS:(.+?)-->/s;
+
+const IMAGEN_MIN_GAP_MS = 15000;
+let lastImagenCallTime = 0;
 
 function createSessionState(socket) {
   return {
@@ -97,6 +100,9 @@ async function initSession(socket) {
   // ── Parser event wiring ──
 
   session.parser.on('text', async (text) => {
+    // Accumulate full story text (Phase 6)
+    session.storyText = (session.storyText || '') + text;
+
     const activePhases = ['narrating', 'resolving', 'closing'];
     if (activePhases.includes(session.phase)) {
       await session.ttsQueue.enqueue(text, 'narration');
@@ -104,15 +110,32 @@ async function initSession(socket) {
   });
 
   session.parser.on('imageTag', async (desc) => {
+    const now = Date.now();
+    if (now - lastImagenCallTime < IMAGEN_MIN_GAP_MS) {
+      console.log(`[SessionManager] Skipping Imagen call for "${desc}" (throttled)`);
+      return;
+    }
+    lastImagenCallTime = now;
+
     try {
       const base64 = await imagen.generateImage(desc);
-      if (base64) socket.send(JSON.stringify({ type: 'image', data: base64 }));
+      if (base64) {
+        // Accumulate images (Phase 6)
+        session.storyImages = session.storyImages || [];
+        session.storyImages.push(base64);
+
+        socket.send(JSON.stringify({ type: 'image', data: base64 }));
+      }
     } catch (e) {
       console.warn('[SessionManager] Imagen failed, skipping image:', e.message);
     }
   });
 
   session.parser.on('moodTag', async (mood) => {
+    // Always send mood_change immediately — frontend Web Audio synthesis fires
+    // without waiting for lyria-002 (which takes a few seconds to generate)
+    socket.send(JSON.stringify({ type: 'mood_change', mood }));
+
     try {
       if (!session.lyriaStream.isOpen && session.phase === 'narrating') {
         await session.lyriaStream.open();
@@ -151,7 +174,11 @@ async function initSession(socket) {
 
   session.parser.on('storyEnd', () => {
     session.phase = 'closing';
-    session.lyriaStream.close().catch(() => { });
+    // lyriaStream.close() may return undefined when stubbed — guard before .catch()
+    const lyriaClose = session.lyriaStream.close();
+    if (lyriaClose && typeof lyriaClose.catch === 'function') {
+      lyriaClose.catch(() => { });
+    }
     console.log('[SessionManager] Story ended, session closing');
   });
 
@@ -159,16 +186,25 @@ async function initSession(socket) {
 
   socket.on('message', async (raw) => {
     let msg;
-    try { 
-      msg = JSON.parse(raw); 
+    try {
+      msg = JSON.parse(raw);
       console.log(`[WS] Received message of type: ${msg.type}`);
-    } catch { 
+    } catch {
       console.warn('[WS] Received non-JSON message:', raw.toString());
-      return; 
+      return;
     }
 
-    if (msg.type === 'start_voice_setup' && session.phase === 'setup') {
+    if (msg.type === 'resume_session') {
+      console.log('[WS] Ignoring resume_session (stale browser cache — do Ctrl+Shift+R)');
+    }
+    else if (msg.type === 'start_voice_setup' && session.phase === 'setup') {
       await startVoiceSetup(session);
+    }
+    else if (msg.type === 'webcam_snapshot' && session.phase === 'setup') {
+      session.cameraGranted = msg.data !== null;
+      session.webcamSnapshot = msg.data; // base64 JPEG or null
+      console.log(`[SessionManager] Webcam snapshot received: ${session.cameraGranted ? 'YES' : 'NO'}`);
+      // transitionToGreeting is called after story_params
     }
     else if (msg.type === 'story_params' && session.phase === 'setup') {
       session.storyParams = msg.params;
@@ -246,21 +282,92 @@ async function transitionToGreeting(session) {
   session.phase = 'greeting';
   session._greetingNarrationScheduled = false;
 
-  session.socket.send(JSON.stringify({ type: 'setup_ready' }));
-  console.log('[SessionManager] Transitioning to greeting phase...');
+  const settingLabel = session.storyParams?.setting || 'a magical world';
+  const moralLabel = session.storyParams?.moral || 'an important lesson';
 
-  const greetingPrompt = `
-You are FableGenie, a warm and magical storyteller for children aged 6–12.
-You can see the user through their webcam right now.
-Give them a warm, personal greeting (3 sentences maximum).
-Mention ONE specific thing you notice about their visible environment.
-${session.userName ? `The user's name is ${session.userName}. Use it warmly.` : ''}
+  const GREETING_PROMPT_WITH_CAMERA = `
+You are FableGenie, a warm and magical AI storyteller.
+You have been given a single image of the audience about to hear your story.
 
-After your greeting, output this EXACT line silently (it will NOT be spoken):
-<!--OBSERVATION: one sentence describing what you noticed-->
+Look at the image and:
+1. Estimate how many people are present (1, 2, or a group)
+2. Estimate the age group (young child 4-7, child 8-12, teen 13+, adult, mixed)
+3. Notice ONE warm detail about what you see — a smile, a cozy room, a toy
 
-Never speak the observation tag.
+Then deliver a warm, engaging introduction in this order:
+- Greet them personally using what you observed (1 sentence)
+- Introduce yourself: "I am FableGenie — I bring stories to life!" (1 sentence)
+- Set the scene: "Today, with the help of a tale from ${settingLabel}, we are going 
+  to discover something important: ${moralLabel}." (1-2 sentences, make it exciting)
+- End with a cliffhanger teaser: hint at the adventure ahead without revealing the plot.
+
+Keep the total greeting to 4-5 sentences. Be warm, magical, and age-appropriate.
+Do not mention AI, cameras, machine learning, or technology.
+
+After your greeting, output this silently on a new line (do not speak it):
+<!--OBSERVATION: {"viewers": <number>, "ageGroup": "<group>", "detail": "<one warm detail>"}-->
   `.trim();
+
+  const GREETING_PROMPT_NO_CAMERA = `
+You are FableGenie, a warm and magical AI storyteller.
+
+Deliver a warm, engaging introduction in this order:
+- Greet the audience warmly and make them feel welcome (1 sentence)
+- Introduce yourself: "I am FableGenie — I bring stories to life!" (1 sentence)
+- Set the scene: "Today, with the help of a tale from ${settingLabel}, we are going 
+  to discover something important: ${moralLabel}." (1-2 sentences, make it exciting)
+- End with a cliffhanger teaser: hint at the adventure ahead without revealing the plot.
+
+Keep the total greeting to 4-5 sentences. Be warm, magical, and age-appropriate.
+Do not mention AI, cameras, machine learning, or technology.
+  `.trim();
+
+  const greetingPrompt = session.cameraGranted
+    ? GREETING_PROMPT_WITH_CAMERA
+    : GREETING_PROMPT_NO_CAMERA;
+
+  // IMPORTANT: Register callbacks BEFORE triggering the greeting
+  // otherwise we might miss the first setup_ready trigger.
+
+  let greetingTextAccumulated = '';
+  session._setupReadySent = false;
+
+  const onOutput = async (rawText) => {
+    if (session.phase !== 'greeting') return;
+    if (typeof rawText !== 'string') return;
+
+    greetingTextAccumulated += rawText;
+    const obs = extractObservation(greetingTextAccumulated);
+    if (obs && !session.observation) {
+      session.observation = obs;
+      console.log(`[SessionManager] Observation stored:`, obs);
+    }
+
+    const spokenText = rawText.replace(OBSERVATION_RE, '').trim();
+    if (spokenText) {
+      console.log(`[GeminiLive] Audio chunk received for: "${spokenText.substring(0, 30)}..."`);
+    }
+  };
+
+  const onAudio = (base64) => {
+    session.socket.send(JSON.stringify({ type: 'live_audio', data: base64 }));
+  };
+
+  const onTurnComplete = async () => {
+    if (session.phase !== 'greeting') return;
+
+    // Send setup_ready here — greeting is done, theater mode can show
+    session.socket.send(JSON.stringify({ type: 'setup_ready' }));
+
+    console.log('[Phase1] Greeting turnComplete fired');
+    if (session._greetingNarrationScheduled) return;
+    session._greetingNarrationScheduled = true;
+    console.log('[Phase1] Scheduling narration in 3s...');
+    setTimeout(() => {
+      console.log('[Phase1] Starting narration now');
+      startNarration(session);
+    }, 3000);
+  };
 
   try {
     if (!session.liveSession) {
@@ -268,58 +375,43 @@ Never speak the observation tag.
     } else {
       await session.liveSession.swapSystemPrompt(greetingPrompt);
     }
+
+    // Now register them
+    session.liveSession.onOutput(onOutput);
+    session.liveSession.onAudio(onAudio);
+    session.liveSession.onTurnComplete(onTurnComplete);
+
+    if (session.cameraGranted && session.webcamSnapshot) {
+      await session.liveSession.sendImage(session.webcamSnapshot);
+    }
   } catch (e) {
     console.error('[SessionManager] Greeting session init failed:', e.message);
-    // Skip greeting, go straight to narration
     await startNarration(session);
     return;
   }
 
-  // Accumulate all greeting text chunks for observation extraction
-  // (the observation tag might come at the end of the full response,
-  //  not necessarily in the first chunk)
-  let greetingTextAccumulated = '';
+  // Kick off first image pre-generation during greeting.
+  // This runs in parallel with the greeting audio so the first illustration
+  // is ready (or close to ready) when narration begins.
+  if (session.storyParams) {
+    const settingDesc = session.storyParams.setting || 'magical world';
+    const firstScenePrompt = `Opening scene from a ${settingDesc} fable, establishing shot, warm golden light`;
+    setImmediate(async () => {
+      try {
+        console.log('[SessionManager] Pre-generating first story image during greeting...');
+        const base64 = await imagen.generateImage(firstScenePrompt);
+        if (base64) {
+          session.preloadedImage = base64;
+          console.log('[SessionManager] First image pre-loaded — ready for narration start');
+        }
+      } catch (e) {
+        console.warn('[SessionManager] Pre-generation failed (non-fatal):', e.message);
+      }
+    });
+  }
 
-  session.liveSession.onOutput(async (rawText) => {
-    if (session.phase !== 'greeting') return;
-    if (typeof rawText !== 'string') return;
-
-    greetingTextAccumulated += rawText;
-
-    // Try to extract observation from accumulated text
-    const obs = extractObservation(greetingTextAccumulated);
-    if (obs && !session.observation) {
-      session.observation = obs;
-      console.log(`[SessionManager] Observation stored: "${obs}"`);
-    }
-
-    // Strip the observation tag before sending to TTS
-    const spokenText = rawText.replace(OBSERVATION_RE, '').trim();
-    if (spokenText) {
-      await session.ttsQueue.enqueue(spokenText, 'greeting');
-    }
-  });
-
-  session.liveSession.onAudio((base64) => {
-    session.socket.send(JSON.stringify({ type: 'live_audio', data: base64 }));
-  });
-
-  // FIX 3: Use onTurnComplete to know when the greeting is DONE.
-  // This replaces the unreliable rawText.length > 50 heuristic.
-  // turnComplete fires once when Gemini finishes its full response.
-  session.liveSession.onTurnComplete(async () => {
-    if (session.phase !== 'greeting') return;
-    if (session._greetingNarrationScheduled) return; // prevent double scheduling
-    session._greetingNarrationScheduled = true;
-
-    console.log('[SessionManager] Greeting complete. Starting narration in 3s...');
-    // Small delay so the last TTS chunk has time to start playing
-    setTimeout(() => startNarration(session), 3000);
-  });
-
-  // Kick off the greeting — safe to call now because initialize()
-  // has already waited for setupComplete before returning
-  await session.liveSession.sendText('Please greet the user now.');
+  // Trigger the greeting
+  await session.liveSession.sendText('Please greet the audience now.');
 }
 
 // ─── Phase 2: Narration ───────────────────────────────────────────────────────
@@ -328,6 +420,18 @@ async function startNarration(session) {
   if (session.phase === 'narrating') return;
   session.phase = 'narrating';
   console.log('[SessionManager] Starting narration phase...');
+
+  // Tell frontend to transition from greeting host to story illustration view
+  session.socket.send(JSON.stringify({ type: 'narration_started' }));
+
+  // If a first image was pre-generated during greeting, send it immediately
+  if (session.preloadedImage) {
+    session.socket.send(JSON.stringify({ type: 'image', data: session.preloadedImage }));
+    session.storyImages = [session.preloadedImage];
+    session.preloadedImage = null;
+    lastImagenCallTime = Date.now(); // start throttle clock from now
+    console.log('[SessionManager] Pre-loaded first image sent to client');
+  }
 
   if (!session.storyParams) {
     console.warn('[SessionManager] No storyParams set — using defaults');

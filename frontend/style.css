@@ -172,6 +172,29 @@ select:focus {
   border-color: var(--accent-color);
 }
 
+.dice-icon {
+  margin-left: 10px;
+  cursor: pointer;
+  filter: grayscale(1);
+  transition: filter 0.3s ease, transform 0.2s ease;
+  display: inline-block;
+}
+
+.dice-icon:hover {
+  filter: grayscale(0);
+  transform: scale(1.2) rotate(15deg);
+}
+
+.shake {
+  animation: shake 0.4s ease-in-out;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
 .pulse {
   animation: pulse-glow 2s infinite;
 }
