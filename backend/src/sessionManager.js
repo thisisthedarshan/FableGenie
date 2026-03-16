@@ -159,7 +159,13 @@ async function initSession(socket) {
 
   socket.on('message', async (raw) => {
     let msg;
-    try { msg = JSON.parse(raw); } catch { return; }
+    try { 
+      msg = JSON.parse(raw); 
+      console.log(`[WS] Received message of type: ${msg.type}`);
+    } catch { 
+      console.warn('[WS] Received non-JSON message:', raw.toString());
+      return; 
+    }
 
     if (msg.type === 'start_voice_setup' && session.phase === 'setup') {
       await startVoiceSetup(session);

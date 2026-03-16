@@ -291,3 +291,75 @@ select:focus {
   border: 2px solid var(--glass-border);
   z-index: 20;
 }
+#ai-host-container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.8);
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, var(--accent-color) 0%, transparent 70%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 15;
+  transition: all 1s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  filter: blur(5px);
+  opacity: 0;
+}
+
+#ai-host-container.visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  filter: blur(0);
+}
+
+.genie-avatar {
+  width: 150px;
+  height: 150px;
+  background: white;
+  border-radius: 50%;
+  position: relative;
+  box-shadow: 0 0 50px var(--accent-color);
+}
+
+.genie-eyes {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 80px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.genie-eyes::before, .genie-eyes::after {
+  content: "";
+  width: 20px;
+  height: 20px;
+  background: #1e293b;
+  border-radius: 50%;
+}
+
+.genie-mouth {
+  position: absolute;
+  bottom: 25%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 10px;
+  background: #1e293b;
+  border-radius: 20px;
+  transition: height 0.1s ease;
+}
+
+/* Speaking micro-animation */
+.speaking .genie-mouth {
+  animation: talk 0.2s infinite alternate;
+}
+
+@keyframes talk {
+  from { height: 10px; }
+  to { height: 25px; }
+}

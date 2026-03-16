@@ -26,22 +26,77 @@
         <div class="form-group">
           <label>Setting:</label>
           <select id="select-setting">
-            <option value="african-savanna">African savanna</option>
-            <option value="ancient-greece">Ancient Greece</option>
-            <option value="enchanted-forest">Enchanted forest</option>
-            <option value="feudal-japan">Feudal Japan</option>
-            <option value="arctic-tundra">Arctic tundra</option>
+            <option value="random">🎲 Randomize</option>
+            <optgroup label="Core Settings">
+              <option value="african-savanna">African Savanna</option>
+              <option value="ancient-greece">Ancient Greece</option>
+              <option value="enchanted-forest">Enchanted Forest</option>
+              <option value="feudal-japan">Feudal Japan</option>
+              <option value="arctic-tundra">Arctic Tundra</option>
+            </optgroup>
+            <optgroup label="Classics">
+              <option value="aesops-fables">Aesop's Fables</option>
+              <option value="panchatantra">Panchatantra</option>
+            </optgroup>
+            <optgroup label="Indian Traditions">
+              <option value="jataka-tales">Jataka Tales</option>
+              <option value="hitopadesha">Hitopadesha</option>
+              <option value="akbar-birbal">Akbar Birbal</option>
+              <option value="tenali-rama">Tenali Rama</option>
+              <option value="vikram-betaal">Vikram Betaal</option>
+              <option value="ramayana">Ramayana</option>
+              <option value="mahabharata">Mahabharata</option>
+              <option value="stories-of-krishna">Stories of Krishna</option>
+              <option value="sufi-parables">Sufi Parables</option>
+            </optgroup>
+            <optgroup label="Middle East & Central Asia">
+              <option value="arabian-nights">Arabian Nights</option>
+              <option value="persian-fables">Persian Fables</option>
+            </optgroup>
+            <optgroup label="African Traditions">
+              <option value="anansi-stories">Anansi Stories</option>
+              <option value="swahili-coast">Swahili Coast</option>
+            </optgroup>
+            <optgroup label="Americas">
+              <option value="native-american">Native American</option>
+              <option value="mayan-highlands">Mayan Highlands</option>
+            </optgroup>
+            <optgroup label="Europe & Norse">
+              <option value="norse-myths">Norse Myths</option>
+              <option value="celtic-isles">Celtic Isles</option>
+              <option value="grimm-forest">Grimm Forest</option>
+            </optgroup>
+            <optgroup label="East Asia">
+              <option value="chinese-classics">Chinese Classics</option>
+              <option value="korean-folklore">Korean Folklore</option>
+            </optgroup>
+            <option value="surprise">Surprise Me</option>
           </select>
         </div>
 
         <div class="form-group">
           <label>Moral theme:</label>
           <select id="select-moral">
+            <option value="random">🎲 Randomize</option>
             <option value="trust">Trust</option>
             <option value="courage">Courage</option>
             <option value="wisdom">Wisdom</option>
             <option value="kindness">Kindness</option>
             <option value="patience">Patience</option>
+            <option value="strategy">Strategy</option>
+            <option value="honesty">Honesty</option>
+            <option value="humility">Humility</option>
+            <option value="greed">Greed</option>
+            <option value="appearances">Appearances</option>
+            <option value="unity">Unity</option>
+            <option value="gratitude">Gratitude</option>
+            <option value="consequences">Consequences</option>
+            <option value="cleverness">Cleverness</option>
+            <option value="duty">Duty</option>
+            <option value="forgiveness">Forgiveness</option>
+            <option value="curiosity">Curiosity</option>
+            <option value="perseverance">Perseverance</option>
+            <option value="generosity">Generosity</option>
           </select>
         </div>
 
@@ -53,6 +108,14 @@
     <section id="theater-mode">
       <div id="image-container"></div>
       <video id="video-container" loop muted playsinline class="hidden"></video>
+      
+      <!-- AI Host / Genie Visual -->
+      <div id="ai-host-container" class="hidden">
+        <div class="genie-avatar">
+          <div class="genie-eyes"></div>
+          <div class="genie-mouth"></div>
+        </div>
+      </div>
       
       <div id="micro-moment-bubble" class="hidden">
         <p id="micro-moment-text"></p>

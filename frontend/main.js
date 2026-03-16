@@ -78,6 +78,11 @@ function connect() {
       case 'setup_ready':
         if (setupScreen) setupScreen.classList.remove('active');
         if (theaterMode) theaterMode.classList.add('active');
+        // Animate Host Appearing
+        setTimeout(() => {
+          const host = document.getElementById('ai-host-container');
+          if (host) host.classList.add('visible');
+        }, 500);
         console.log('[WS] Theater mode activated');
         break;
 
@@ -88,6 +93,9 @@ function connect() {
         break;
 
       case 'tts_audio':
+        // Host speaking animation
+        const host = document.getElementById('ai-host-container');
+        if (host) host.classList.add('speaking');
         await playTTSChunk(msg.data, msg.chunkIndex);
         break;
 
@@ -103,6 +111,9 @@ function connect() {
         if (videoContainer) {
           videoContainer.src = msg.url;
           videoContainer.classList.remove('hidden');
+          // Hide host when cinematic video plays
+          const hostPanel = document.getElementById('ai-host-container');
+          if (hostPanel) hostPanel.classList.remove('visible');
           videoContainer.play().catch(e => console.warn('[Video] Play failed:', e));
         }
         break;
@@ -174,6 +185,8 @@ async function playTTSChunk(base64Data, chunkIndex) {
     nextPlayTime = playAt + audioBuffer.duration;
 
     source.onended = () => {
+      const host = document.getElementById('ai-host-container');
+      if (host) host.classList.remove('speaking');
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'tts_done', chunkIndex }));
       }
@@ -260,6 +273,118 @@ function playLyriaPCM(base64Data) {
   }
 }
 
+// ─── Randomizer Helpers ────────────────────────────────────────────────────────
+
+function pickRandomOption(selectId) {
+  const select = document.getElementById(selectId);
+  if (!select) return null;
+  const options = Array.from(select.querySelectorAll('option'))
+    .filter(opt => opt.value !== 'random');
+  const randomOpt = options[Math.floor(Math.random() * options.length)];
+  return randomOpt ? randomOpt.value : null;
+}
+
+// ─── Media Stream Manager (WebRTC) ─────────────────────────────────────────────
+
+class MediaStreamManager {
+  constructor() {
+    this.stream = null;
+    this.audioContext = null;
+    this.processor = null;
+    this.videoInterval = null;
+    this.isCapturing = false;
+    this.videoTrack = null;
+    // For video frame capture
+    this.captureVideo = document.createElement('video');
+    this.captureVideo.setAttribute('autoplay', '');
+    this.captureVideo.setAttribute('muted', '');
+    this.captureVideo.setAttribute('playsinline', '');
+    this.captureCanvas = document.createElement('canvas');
+  }
+
+  async requestPermissions() {
+    try {
+      console.log('[Media] Requesting permissions (mic + camera)...');
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: { width: 640, height: 480, frameRate: 15 }
+      });
+      console.log('[Media] Permissions GRANTED');
+      
+      this.videoTrack = this.stream.getVideoTracks()[0];
+      this.captureVideo.srcObject = this.stream;
+      await this.captureVideo.play();
+      
+      return true;
+    } catch (e) {
+      console.error('[Media] Permission FAILED:', e);
+      return false;
+    }
+  }
+
+  startCapture() {
+    if (!this.stream || this.isCapturing) return;
+    this.isCapturing = true;
+    console.log('[Media] Starting capture streams...');
+
+    try {
+      // Audio Capture & Resampling (16kHz PCM)
+      this.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const source = this.audioContext.createMediaStreamSource(this.stream);
+      this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+      
+      this.processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        const pcm16 = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          pcm16[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+        }
+        const base64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'webrtc_audio', data: base64 }));
+        }
+      };
+
+      source.connect(this.processor);
+      this.processor.connect(this.audioContext.destination);
+
+      // Video Frame Capture (JPEG @ ~2 FPS)
+      this.videoInterval = setInterval(() => {
+        if (!this.isCapturing) return;
+        try {
+          this.captureCanvas.width = 640;
+          this.captureCanvas.height = 480;
+          const ctx = this.captureCanvas.getContext('2d');
+          ctx.drawImage(this.captureVideo, 0, 0, 640, 480);
+          const base64 = this.captureCanvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'webrtc_video', data: base64 }));
+          }
+        } catch (e) {
+          console.warn('[Media] Video frame failed:', e);
+        }
+      }, 500);
+      
+      console.log('[Media] Capture streams ACTIVE');
+    } catch (e) {
+      console.error('[Media] startCapture failed:', e);
+    }
+  }
+
+  stopCapture() {
+    console.log('[Media] Stopping capture');
+    this.isCapturing = false;
+    if (this.videoInterval) clearInterval(this.videoInterval);
+    if (this.processor) this.processor.disconnect();
+    if (this.audioContext) this.audioContext.close();
+    if (this.stream) {
+      this.stream.getTracks().forEach(track => track.stop());
+    }
+  }
+}
+
+const mediaManager = new MediaStreamManager();
+
 // ─── UI Events ────────────────────────────────────────────────────────────────
 
 // Resume AudioContext on first user interaction (browser autoplay policy)
@@ -270,8 +395,14 @@ document.body.addEventListener('click', () => {
 }, { once: true });
 
 if (btnVoiceSetup) {
-  btnVoiceSetup.addEventListener('click', () => {
-    if (audioContext.state === 'suspended') audioContext.resume();
+  btnVoiceSetup.addEventListener('click', async () => {
+    if (audioContext.state === 'suspended') await audioContext.resume();
+    const ok = await mediaManager.requestPermissions();
+    if (!ok) {
+      alert('Microphone and Camera access is needed for the Genie to see and hear you.');
+      return;
+    }
+    mediaManager.startCapture();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'start_voice_setup' }));
     }
@@ -279,19 +410,35 @@ if (btnVoiceSetup) {
 }
 
 if (btnUiSetup) {
-  btnUiSetup.addEventListener('click', () => {
-    if (audioContext.state === 'suspended') audioContext.resume();
+  btnUiSetup.addEventListener('click', async () => {
+    console.log('[UI] Begin the fable clicked');
+    if (audioContext.state === 'suspended') await audioContext.resume();
     if (!selectSetting || !selectMoral) return;
+
+    const settingValue = selectSetting.value === 'random' ? pickRandomOption('select-setting') : selectSetting.value;
+    const moralValue = selectMoral.value === 'random' ? pickRandomOption('select-moral') : selectMoral.value;
+    console.log(`[UI] Chosen params: setting=${settingValue}, moral=${moralValue}`);
+
+    const ok = await mediaManager.requestPermissions();
+    if (!ok) {
+      alert('Microphone and Camera access is needed for the Genie to see and hear you.');
+      return;
+    }
+    mediaManager.startCapture();
+
     if (ws && ws.readyState === WebSocket.OPEN) {
+      console.log('[UI] Sending story_params to server...');
       ws.send(JSON.stringify({
         type: 'story_params',
         params: {
-          setting: selectSetting.value,
-          moral: selectMoral.value,
+          setting: settingValue,
+          moral: moralValue,
           userIdea: null,
           userName: null
         }
       }));
+    } else {
+      console.error('[UI] WebSocket NOT open! ReadyState:', ws?.readyState);
     }
   });
 }
