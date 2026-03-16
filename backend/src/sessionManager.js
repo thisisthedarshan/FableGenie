@@ -132,7 +132,10 @@ async function initSession(socket) {
   });
 
   session.parser.on('microMoment', (question) => {
-    socket.send(JSON.stringify({ type: 'micro_moment', question }));
+    // Route through TTS queue so the question popup is synced with narration audio.
+    // Without this, the question appears 20-30s before the narration reaches it.
+    console.log(`[SessionManager] [MICRO_MOMENT] tag parsed — enqueueing in TTS pipeline`);
+    session.ttsQueue.enqueueMicroMoment(question);
   });
 
   session.parser.on('branchChoice', async () => {
@@ -256,6 +259,12 @@ async function startVoiceSetup(session) {
     session.liveSession.onAudio((base64) => {
       session.socket.send(JSON.stringify({ type: 'live_audio', data: base64 }));
     });
+
+    // Prompt the model to start the conversation — without this,
+    // it just listens to audio but never initiates.
+    await session.liveSession.sendText(
+      'Hello! I want to hear a story. Please ask me what kind of story I\'d like.'
+    );
   } catch (e) {
     console.error('[SessionManager] Voice setup failed:', e.message);
     // Graceful fallback: tell client to use UI cards instead
@@ -434,6 +443,14 @@ async function startNarration(session) {
     };
   }
 
+  // Give TTS pipeline the story context so imagePrompter can generate
+  // scene-appropriate illustrations using the setting, not just raw chunk text.
+  session.ttsQueue.storyContext = {
+    setting: session.storyParams.setting,
+    moral: session.storyParams.moral,
+    userIdea: session.storyParams.userIdea
+  };
+
   let sysPrompt;
   try {
     sysPrompt = buildSystemPrompt({
@@ -513,6 +530,9 @@ async function handleBranchResult(session, branch) {
   if (session.phase !== 'gesture_capture') return;
   session.phase = 'resolving';
   console.log(`[SessionManager] Branch chosen: ${branch}`);
+
+  // Always confirm to frontend so overlay dismisses and mic stops
+  session.socket.send(JSON.stringify({ type: 'gesture_confirmed', branch }));
 
   const videoFile = branch === 'trust'
     ? 'trust_resolution.mp4'

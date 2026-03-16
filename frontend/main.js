@@ -483,6 +483,13 @@ async function startBranchMic() {
     processor.onaudioprocess = (e) => {
       if (!branchMicActive) return;
       const f32 = e.inputBuffer.getChannelData(0);
+
+      // VAD: compute RMS energy, skip silent chunks
+      let sumSq = 0;
+      for (let i = 0; i < f32.length; i++) sumSq += f32[i] * f32[i];
+      const rms = Math.sqrt(sumSq / f32.length);
+      if (rms < 0.01) return; // silence threshold
+
       const i16 = new Int16Array(f32.length);
       for (let i = 0; i < f32.length; i++) {
         i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32768));
@@ -608,6 +615,13 @@ class MediaStreamManager {
       this.processor = this.micCtx.createScriptProcessor(4096, 1, 1);
       this.processor.onaudioprocess = (e) => {
         const f32 = e.inputBuffer.getChannelData(0);
+
+        // VAD: compute RMS energy, skip silent chunks
+        let sumSq = 0;
+        for (let i = 0; i < f32.length; i++) sumSq += f32[i] * f32[i];
+        const rms = Math.sqrt(sumSq / f32.length);
+        if (rms < 0.01) return; // silence threshold
+
         const i16 = new Int16Array(f32.length);
         for (let i = 0; i < f32.length; i++) {
           i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32768));
@@ -708,6 +722,8 @@ if (btnUiSetup) {
 }
 
 window.sendMockGesture = function (branch) {
+  // Immediately dismiss overlay and stop mic — don't wait for server round-trip
+  hideBranchOverlay();
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'gesture_confirmed', branch }));
   }

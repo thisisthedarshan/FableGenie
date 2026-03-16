@@ -28,6 +28,7 @@ class TTSPipeline {
     this.nextChunkIndex = 0;
     this.lookahead = 4; // synthesize 4 chunks ahead of playback (was 2)
     this.lastImageTime = 0; // rate-limit Imagen calls
+    this.storyContext = null; // set by sessionManager when narration starts
   }
 
   async enqueue(text, phase) {
@@ -59,6 +60,22 @@ class TTSPipeline {
     this.processQueue();
   }
 
+  /**
+   * Enqueue a micro-moment question. Like branch_marker, it fires
+   * only after all preceding audio has been played.
+   */
+  enqueueMicroMoment(question) {
+    this.queue.push({
+      text: question,
+      phase: 'micro_moment_marker',
+      chunkIndex: this.nextChunkIndex++,
+      audioBase64: null,
+      imageBase64: null,
+      status: 'pending'
+    });
+    this.processQueue();
+  }
+
   advance(playedChunkIndex) {
     this.currentPlayIndex = playedChunkIndex + 1;
     for (let item of this.queue) {
@@ -78,14 +95,25 @@ class TTSPipeline {
       return;
     }
 
-    // ── Branch marker: fire signal instead of synthesizing ──
-    if (toSynthesize.phase === 'branch_marker') {
-      toSynthesize.status = 'ready';
-      console.log(`[TTS] Branch marker reached at chunk ${toSynthesize.chunkIndex}`);
-      this.socket.send(JSON.stringify({ type: 'tts_branch_reached' }));
+    // ── Playback-synced markers: fire only after all preceding audio has PLAYED ──
+    if (toSynthesize.phase === 'branch_marker' || toSynthesize.phase === 'micro_moment_marker') {
+      if (this.currentPlayIndex < toSynthesize.chunkIndex) {
+        // Not ready yet — will be re-checked when advance() is called
+        return;
+      }
       toSynthesize.status = 'played';
-      // Don't continue processing — wait for branch resolution
-      return;
+
+      if (toSynthesize.phase === 'branch_marker') {
+        console.log(`[TTS] Branch marker fired at chunk ${toSynthesize.chunkIndex} (all preceding audio played)`);
+        this.socket.send(JSON.stringify({ type: 'tts_branch_reached' }));
+        return; // Don't continue processing — wait for branch resolution
+      } else {
+        console.log(`[TTS] Micro-moment fired at chunk ${toSynthesize.chunkIndex}`);
+        this.socket.send(JSON.stringify({ type: 'micro_moment', question: toSynthesize.text }));
+        // Continue processing — micro moments don't pause the queue
+        this.processQueue();
+        return;
+      }
     }
 
     this.isSynthesizing = true;
@@ -116,8 +144,9 @@ class TTSPipeline {
 
       if (toSynthesize.phase === 'narration' && canGenerateImage) {
         this.lastImageTime = now; // claim slot immediately to prevent races
+        const setting = this.storyContext?.setting || null;
         imagePromise = (async () => {
-          const visualPrompt = await imagePrompter.getVisualPrompt(toSynthesize.text);
+          const visualPrompt = await imagePrompter.getVisualPrompt(toSynthesize.text, setting);
           return await imagen.generateImage(visualPrompt);
         })();
       } else if (toSynthesize.phase === 'narration') {

@@ -16,12 +16,18 @@ const MODEL_NAME = 'gemini-2.5-flash';
 
 /**
  * Converts a story chunk into a concise visual prompt for Imagen.
- * @param {string} text 
+ * @param {string} text - the story chunk text
+ * @param {string|null} setting - optional story setting for context
  * @returns {Promise<string>}
  */
-async function getVisualPrompt(text) {
+async function getVisualPrompt(text, setting) {
   try {
     const ai = getGenAI();
+
+    const settingContext = setting
+      ? `\nStory setting: "${setting}" \u2014 visuals must match this world.`
+      : '';
+
     const prompt = `
 Describe a single core visual scene from the story snippet below. 
 The description must be:
@@ -29,7 +35,8 @@ The description must be:
 - Purely visual (no abstract concepts)
 - Focused on subjects, colors, and environment
 - Styled for a children's storybook watercolor illustration
-
+- Consistent with the story's world and setting
+${settingContext}
 Text: "${text}"
 
 Visual Prompt:`.trim();
