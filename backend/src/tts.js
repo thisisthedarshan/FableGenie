@@ -21,7 +21,7 @@ class TTSPipeline {
     this.isSynthesizing = false;
     this.currentPlayIndex = 0;
     this.nextChunkIndex = 0;
-    this.lookahead = 2;
+    this.lookahead = 4; // synthesize 4 chunks ahead of playback (was 2)
   }
 
   async enqueue(text, phase) {
@@ -61,14 +61,14 @@ class TTSPipeline {
       console.log(`[TTS] Synthesizing chunk ${toSynthesize.chunkIndex}...`);
 
       const stylePrefixMap = {
-        setup: '[speak slowly and warmly]',
-        greeting: '[speak slowly and warmly]',
-        narration: '[speak slowly and warmly]',
+        setup: '[speak naturally and warmly]',
+        greeting: '[speak naturally and warmly]',
+        narration: '[speak naturally and warmly]',
         qa_answer: '[speak conversationally]',
-        closing: '[speak slowly and warmly]',
+        closing: '[speak gently and warmly]',
       };
 
-      const prefix = stylePrefixMap[toSynthesize.phase] || '[speak slowly and warmly]';
+      const prefix = stylePrefixMap[toSynthesize.phase] || '[speak naturally]';
       const prompt = `${prefix} ${toSynthesize.text}`;
 
       const ai = getGenAI();
@@ -104,13 +104,10 @@ class TTSPipeline {
         this.socket.send(JSON.stringify({
           type: 'tts_audio',
           data: toSynthesize.audioBase64,
-          // Send mimeType so frontend can decode correctly.
-          // gemini-2.5-flash-preview-tts returns raw PCM (audio/pcm;rate=24000)
-          // NOT WAV — decodeAudioData will fail on it.
-          mimeType: inlineData.mimeType || 'audio/pcm;rate=24000',
+          mimeType: inlineData.mimeType || 'audio/L16;codec=pcm;rate=24000',
           chunkIndex: toSynthesize.chunkIndex
         }));
-        console.log(`[TTS] Chunk ${toSynthesize.chunkIndex} ready — mimeType: ${inlineData.mimeType || 'unknown'}`);
+        console.log(`[TTS] Chunk ${toSynthesize.chunkIndex} ready — mimeType: ${inlineData.mimeType}`);
       } else {
         console.warn(`[TTS] No audio data returned for chunk ${toSynthesize.chunkIndex}`);
         toSynthesize.status = 'played';

@@ -13,7 +13,9 @@ const OBSERVATION_RE = /<!--OBSERVATION:\s*(.+?)-->/;
 const PARAMS_RE = /<!--STORY_PARAMS:(.+?)-->/s;
 
 const IMAGEN_MIN_GAP_MS = 15000;
-let lastImagenCallTime = 0;
+// NOTE: lastImagenCallTime is intentionally NOT module-level.
+// It is set per-session in createSessionState so sessions don't
+// throttle each other.
 
 function createSessionState(socket) {
   return {
@@ -29,7 +31,11 @@ function createSessionState(socket) {
     lyriaStream: new lyria.LyriaStream(socket),
     observation: null,
     userName: null,
-    _greetingNarrationScheduled: false, // guard against multiple startNarration calls
+    _greetingNarrationScheduled: false,
+    preloadedImage: null,
+    storyText: '',
+    storyImages: [],
+    lastImagenCallTime: 0,  // session-scoped so sessions don't throttle each other
   };
 }
 
@@ -111,23 +117,24 @@ async function initSession(socket) {
 
   session.parser.on('imageTag', async (desc) => {
     const now = Date.now();
-    if (now - lastImagenCallTime < IMAGEN_MIN_GAP_MS) {
-      console.log(`[SessionManager] Skipping Imagen call for "${desc}" (throttled)`);
+    if (now - session.lastImagenCallTime < IMAGEN_MIN_GAP_MS) {
+      console.log(`[SessionManager] Skipping Imagen call for "${desc.substring(0, 40)}" (throttled)`);
       return;
     }
-    lastImagenCallTime = now;
+    session.lastImagenCallTime = now;
 
     try {
       const base64 = await imagen.generateImage(desc);
       if (base64) {
-        // Accumulate images (Phase 6)
         session.storyImages = session.storyImages || [];
         session.storyImages.push(base64);
-
+        console.log(`[SessionManager] Sending image to client (${Math.round(base64.length * 0.75 / 1024)}KB)`);
         socket.send(JSON.stringify({ type: 'image', data: base64 }));
+      } else {
+        console.warn('[SessionManager] Imagen returned null — skipping');
       }
     } catch (e) {
-      console.warn('[SessionManager] Imagen failed, skipping image:', e.message);
+      console.warn('[SessionManager] Imagen failed:', e.message);
     }
   });
 
@@ -152,10 +159,11 @@ async function initSession(socket) {
 
   session.parser.on('branchChoice', async () => {
     session.phase = 'gesture_capture';
-    socket.send(JSON.stringify({ type: 'gesture_prompt' }));
+    // TODO: Re-enable gesture overlay when camera gesture detection is implemented.
+    // For now, suppress the popup and go straight to voice fallback.
+    // socket.send(JSON.stringify({ type: 'gesture_prompt' }));
 
     if (session.liveSession) {
-      // Swap to gesture detection mode
       await session.liveSession.swapSystemPrompt(LIVE_GESTURE_PROMPT);
       session.liveSession.onOutput((raw) => {
         if (session.phase !== 'gesture_capture') return;
@@ -167,7 +175,7 @@ async function initSession(socket) {
             socket.send(JSON.stringify({ type: 'gesture_confirmed', branch: res.choice }));
             handleBranchResult(session, res.choice);
           }
-        } catch (e) { /* not JSON yet, still watching */ }
+        } catch (e) { /* not JSON yet */ }
       });
     }
   });
@@ -353,15 +361,23 @@ Do not mention AI, cameras, machine learning, or technology.
     session.socket.send(JSON.stringify({ type: 'live_audio', data: base64 }));
   };
 
-  const onTurnComplete = async () => {
-    if (session.phase !== 'greeting') return;
+  // One-time guard using a closure-local boolean.
+  // Do NOT rely on session.phase here — the Live model sometimes sends
+  // turnComplete twice for a single response, and the second fire can
+  // race with the setTimeout in a way that phase hasn't updated yet.
+  let greetingDone = false;
 
-    // Send setup_ready here — greeting is done, theater mode can show
+  const onTurnComplete = async () => {
+    if (greetingDone) {
+      console.log('[Phase1] Duplicate turnComplete ignored');
+      return;
+    }
+    greetingDone = true;
+
+    // Send setup_ready — greeting audio is done, theater mode can show
     session.socket.send(JSON.stringify({ type: 'setup_ready' }));
 
     console.log('[Phase1] Greeting turnComplete fired');
-    if (session._greetingNarrationScheduled) return;
-    session._greetingNarrationScheduled = true;
     console.log('[Phase1] Scheduling narration in 3s...');
     setTimeout(() => {
       console.log('[Phase1] Starting narration now');
@@ -390,9 +406,7 @@ Do not mention AI, cameras, machine learning, or technology.
     return;
   }
 
-  // Kick off first image pre-generation during greeting.
-  // This runs in parallel with the greeting audio so the first illustration
-  // is ready (or close to ready) when narration begins.
+  // Pre-generate first image during greeting — runs in parallel with greeting audio
   if (session.storyParams) {
     const settingDesc = session.storyParams.setting || 'magical world';
     const firstScenePrompt = `Opening scene from a ${settingDesc} fable, establishing shot, warm golden light`;
@@ -401,8 +415,12 @@ Do not mention AI, cameras, machine learning, or technology.
         console.log('[SessionManager] Pre-generating first story image during greeting...');
         const base64 = await imagen.generateImage(firstScenePrompt);
         if (base64) {
-          session.preloadedImage = base64;
-          console.log('[SessionManager] First image pre-loaded — ready for narration start');
+          console.log('[SessionManager] First image ready — sending to client immediately');
+          // Send directly regardless of phase — narration may have already started
+          // but the image is still welcome on screen
+          session.storyImages.push(base64);
+          session.lastImagenCallTime = Date.now();
+          socket.send(JSON.stringify({ type: 'image', data: base64 }));
         }
       } catch (e) {
         console.warn('[SessionManager] Pre-generation failed (non-fatal):', e.message);
@@ -423,15 +441,6 @@ async function startNarration(session) {
 
   // Tell frontend to transition from greeting host to story illustration view
   session.socket.send(JSON.stringify({ type: 'narration_started' }));
-
-  // If a first image was pre-generated during greeting, send it immediately
-  if (session.preloadedImage) {
-    session.socket.send(JSON.stringify({ type: 'image', data: session.preloadedImage }));
-    session.storyImages = [session.preloadedImage];
-    session.preloadedImage = null;
-    lastImagenCallTime = Date.now(); // start throttle clock from now
-    console.log('[SessionManager] Pre-loaded first image sent to client');
-  }
 
   if (!session.storyParams) {
     console.warn('[SessionManager] No storyParams set — using defaults');
