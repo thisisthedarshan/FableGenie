@@ -2,12 +2,32 @@ const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const wsUrl = `${protocol}//${window.location.host}`;
 
 let ws;
-let sessionId = localStorage.getItem('fable_session_id') || null;
+
+// FIX 4: Use sessionStorage instead of localStorage.
+// localStorage persists across page reloads and browser sessions, which means
+// a stale session ID from a previous run gets sent on reconnect, confusing
+// the server. sessionStorage is cleared when the tab closes.
+let sessionId = sessionStorage.getItem('fable_session_id') || null;
+
+// FIX 4: intentionalClose flag prevents reconnect loop.
+// When the server deliberately closes the connection (e.g. error during init),
+// we don't want to silently reconnect in a loop. Only reconnect on unexpected drops.
+let intentionalClose = false;
+
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 let nextPlayTime = 0;
+let lyriaGainNode = null;
 let lyriaAudioSource = null;
 
-// UI Elements
+// Set up a persistent Lyria gain node so we can fade volume
+if (!lyriaGainNode) {
+  lyriaGainNode = audioContext.createGain();
+  lyriaGainNode.gain.value = 0;
+  lyriaGainNode.connect(audioContext.destination);
+}
+
+// ─── UI Elements ──────────────────────────────────────────────────────────────
+
 const setupScreen = document.getElementById('setup-screen');
 const theaterMode = document.getElementById('theater-mode');
 const btnVoiceSetup = document.getElementById('btn-voice-setup');
@@ -15,42 +35,56 @@ const btnUiSetup = document.getElementById('btn-ui-setup');
 const selectSetting = document.getElementById('select-setting');
 const selectMoral = document.getElementById('select-moral');
 const voiceStatus = document.getElementById('voice-status');
-
 const imageContainer = document.getElementById('image-container');
 const videoContainer = document.getElementById('video-container');
 const microMomentBubble = document.getElementById('micro-moment-bubble');
 const microMomentText = document.getElementById('micro-moment-text');
 const gestureOverlay = document.getElementById('gesture-overlay');
 
+// ─── WebSocket ────────────────────────────────────────────────────────────────
+
 function connect() {
+  intentionalClose = false;
   ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
-    console.log('Connected to server');
-    if (sessionId) {
-      // Stub for reconnection
-      // ws.send(JSON.stringify({ type: 'reconnect', id: sessionId }));
-    }
+    console.log('[WS] Connected');
   };
 
   ws.onmessage = async (event) => {
-    const msg = JSON.parse(event.data);
-    
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
     switch (msg.type) {
+
       case 'session_id':
         sessionId = msg.id;
-        localStorage.setItem('fable_session_id', sessionId);
+        sessionStorage.setItem('fable_session_id', sessionId);
+        console.log(`[WS] Session ID: ${sessionId}`);
         break;
 
       case 'setup_listening':
-        voiceStatus.classList.remove('hidden');
-        // A real implementation would capture mic via getUserMedia 
-        // and stream WebRTC or base64 chunks back as 'webrtc_audio'
+        if (voiceStatus) voiceStatus.classList.remove('hidden');
+        // Real mic streaming: capture via getUserMedia and send as webrtc_audio
+        // For now this is a placeholder — the server will time out voice setup
+        // and fall back to UI cards if no audio arrives
+        console.log('[WS] Voice setup listening...');
         break;
 
       case 'setup_ready':
-        setupScreen.classList.remove('active');
-        theaterMode.classList.add('active');
+        if (setupScreen) setupScreen.classList.remove('active');
+        if (theaterMode) theaterMode.classList.add('active');
+        console.log('[WS] Theater mode activated');
+        break;
+
+      case 'setup_fallback':
+        // Server couldn't do voice setup — show UI cards
+        if (voiceStatus) voiceStatus.classList.add('hidden');
+        console.warn('[WS] Voice setup fallback:', msg.reason);
         break;
 
       case 'tts_audio':
@@ -58,7 +92,7 @@ function connect() {
         break;
 
       case 'image':
-        imageContainer.style.backgroundImage = `url(data:image/jpeg;base64,${msg.data})`;
+        showIllustration(msg.data);
         break;
 
       case 'lyria_pcm':
@@ -66,166 +100,209 @@ function connect() {
         break;
 
       case 'branch_video':
-        videoContainer.src = msg.url;
-        videoContainer.classList.remove('hidden');
-        videoContainer.play();
+        if (videoContainer) {
+          videoContainer.src = msg.url;
+          videoContainer.classList.remove('hidden');
+          videoContainer.play().catch(e => console.warn('[Video] Play failed:', e));
+        }
         break;
 
       case 'video_unavailable':
-        // Fallback handled silently by just not showing video
+        // Imagen slideshow fallback is handled server-side via image events
+        console.log('[WS] Video unavailable — Imagen slideshow mode');
         break;
 
       case 'micro_moment':
-        microMomentText.textContent = msg.question;
-        microMomentBubble.classList.remove('hidden');
-        setTimeout(() => microMomentBubble.classList.add('hidden'), 4000);
+        if (microMomentText) microMomentText.textContent = msg.question;
+        if (microMomentBubble) {
+          microMomentBubble.classList.remove('hidden');
+          setTimeout(() => microMomentBubble.classList.add('hidden'), 5000);
+        }
         break;
 
       case 'gesture_prompt':
-        gestureOverlay.classList.remove('hidden');
+        if (gestureOverlay) gestureOverlay.classList.remove('hidden');
         break;
 
       case 'gesture_confirmed':
-        gestureOverlay.classList.add('hidden');
+        if (gestureOverlay) gestureOverlay.classList.add('hidden');
         break;
+
+      default:
+        console.log('[WS] Unknown message type:', msg.type);
     }
   };
 
-  ws.onclose = () => {
-    console.log('Connection lost, retrying in 1.5s...');
+  ws.onerror = (err) => {
+    console.error('[WS] WebSocket error:', err);
+  };
+
+  ws.onclose = (event) => {
+    if (intentionalClose) {
+      console.log('[WS] Connection closed intentionally');
+      return;
+    }
+    console.warn(`[WS] Connection lost (code: ${event.code}). Retrying in 1.5s...`);
     setTimeout(connect, 1500);
   };
 }
 
-// Play overlapping TTS
+// ─── TTS Playback ─────────────────────────────────────────────────────────────
+
 async function playTTSChunk(base64Data, chunkIndex) {
+  // Resume AudioContext if browser blocked it (requires user gesture)
+  if (audioContext.state === 'suspended') {
+    await audioContext.resume();
+  }
+
   try {
     const binaryStr = atob(base64Data);
-    const len = binaryStr.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
     }
-    
+
     const audioBuffer = await audioContext.decodeAudioData(bytes.buffer);
-    
+
     const source = audioContext.createBufferSource();
     source.buffer = audioBuffer;
     source.connect(audioContext.destination);
 
-    // Prevent immediate overlap by scheduling
-    const currentTime = audioContext.currentTime;
-    const playAt = Math.max(currentTime, nextPlayTime);
-    
+    const now = audioContext.currentTime;
+    const playAt = Math.max(now, nextPlayTime);
     source.start(playAt);
     nextPlayTime = playAt + audioBuffer.duration;
 
     source.onended = () => {
-      if(ws && ws.readyState === WebSocket.OPEN) {
-         ws.send(JSON.stringify({ type: 'tts_done', chunkIndex }));
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'tts_done', chunkIndex }));
       }
     };
   } catch (e) {
-    console.error('Error playing TTS chunk:', e);
-    // Tell server we're done so it advances anyway
-    if(ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'tts_done', chunkIndex }));
+    console.error('[TTS] Playback error:', e);
+    // Always advance the queue even on error — otherwise TTS stalls permanently
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'tts_done', chunkIndex }));
     }
   }
 }
 
-// Decode raw PCM from Lyria
-async function playLyriaPCM(base64Data) {
-   // Decode base64 to binary
-   const binaryString = atob(base64Data);
-   const len = binaryString.length;
-   
-   // It's 16-bit PCM, so divide total bytes by 2
-   const buffer = new ArrayBuffer(len);
-   const view = new DataView(buffer);
-   
-   for (let i = 0; i < len; i++) {
-     view.setUint8(i, binaryString.charCodeAt(i));
-   }
-   
-   // Create Int16Array from the buffer
-   const int16Array = new Int16Array(buffer);
-   
-   // Convert to Float32 Array for WebAudio API
-   const float32Array = new Float32Array(int16Array.length);
-   for (let i = 0; i < int16Array.length; i++) {
-     float32Array[i] = int16Array[i] / 32768.0; 
-   }
+// ─── Illustration Fade-in ─────────────────────────────────────────────────────
 
-   const sampleRate = 48000;
-   const channels = 2; // Stereo
-   const frameCount = float32Array.length / channels;
-   
-   try {
-     const audioBuffer = audioContext.createBuffer(channels, frameCount, sampleRate);
-     
-     // De-interleave channel data
-     for (let channel = 0; channel < channels; channel++) {
-       const nowBuffering = audioBuffer.getChannelData(channel);
-       for (let i = 0; i < frameCount; i++) {
-          nowBuffering[i] = float32Array[i * channels + channel];
-       }
-     }
-     
-     // Stop previous loop if running
-     if (lyriaAudioSource) {
-         lyriaAudioSource.stop();
-     }
-
-     lyriaAudioSource = audioContext.createBufferSource();
-     lyriaAudioSource.buffer = audioBuffer;
-     lyriaAudioSource.loop = true;
-     
-     // Add a slight gain fade-in to make transitions smoother
-     const gainNode = audioContext.createGain();
-     gainNode.gain.setValueAtTime(0, audioContext.currentTime);
-     gainNode.gain.linearRampToValueAtTime(0.5, audioContext.currentTime + 2); // 50% volume for background
-     
-     lyriaAudioSource.connect(gainNode);
-     gainNode.connect(audioContext.destination);
-     
-     lyriaAudioSource.start();
-
-   } catch(e) {
-     console.error('Error playing Lyria PCM', e);
-   }
+function showIllustration(base64Data) {
+  if (!imageContainer) return;
+  const img = new Image();
+  img.onload = () => {
+    imageContainer.style.opacity = '0';
+    imageContainer.style.backgroundImage = `url(${img.src})`;
+    imageContainer.style.transition = 'opacity 0.8s ease-in';
+    // Trigger reflow before setting opacity so the transition fires
+    void imageContainer.offsetWidth;
+    imageContainer.style.opacity = '1';
+  };
+  img.src = `data:image/jpeg;base64,${base64Data}`;
 }
 
-// Connect manually if audio context requires user interaction
-document.body.addEventListener('click', () => {
-    if (audioContext.state === 'suspended') {
-        audioContext.resume();
+// ─── Lyria PCM Playback ───────────────────────────────────────────────────────
+
+function playLyriaPCM(base64Data) {
+  if (audioContext.state === 'suspended') {
+    audioContext.resume();
+  }
+
+  try {
+    const binaryStr = atob(base64Data);
+    const buffer = new ArrayBuffer(binaryStr.length);
+    const view = new DataView(buffer);
+    for (let i = 0; i < binaryStr.length; i++) {
+      view.setUint8(i, binaryStr.charCodeAt(i));
     }
+
+    const int16Array = new Int16Array(buffer);
+    const float32Array = new Float32Array(int16Array.length);
+    for (let i = 0; i < int16Array.length; i++) {
+      float32Array[i] = int16Array[i] / 32768.0;
+    }
+
+    const sampleRate = 48000;
+    const channels = 2;
+    const frameCount = Math.floor(float32Array.length / channels);
+
+    const audioBuffer = audioContext.createBuffer(channels, frameCount, sampleRate);
+    for (let ch = 0; ch < channels; ch++) {
+      const channelData = audioBuffer.getChannelData(ch);
+      for (let i = 0; i < frameCount; i++) {
+        channelData[i] = float32Array[i * channels + ch];
+      }
+    }
+
+    // Fade out and stop existing Lyria source before starting new one
+    if (lyriaAudioSource) {
+      try {
+        lyriaGainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.5);
+        lyriaAudioSource.stop(audioContext.currentTime + 0.5);
+      } catch { /* already stopped */ }
+    }
+
+    lyriaAudioSource = audioContext.createBufferSource();
+    lyriaAudioSource.buffer = audioBuffer;
+    lyriaAudioSource.loop = true;
+    lyriaAudioSource.connect(lyriaGainNode);
+
+    // Fade in new mood
+    lyriaGainNode.gain.cancelScheduledValues(audioContext.currentTime);
+    lyriaGainNode.gain.setValueAtTime(0, audioContext.currentTime + 0.5);
+    lyriaGainNode.gain.linearRampToValueAtTime(0.2, audioContext.currentTime + 2.5);
+
+    lyriaAudioSource.start(audioContext.currentTime + 0.5);
+  } catch (e) {
+    console.error('[Lyria] PCM playback error:', e);
+  }
+}
+
+// ─── UI Events ────────────────────────────────────────────────────────────────
+
+// Resume AudioContext on first user interaction (browser autoplay policy)
+document.body.addEventListener('click', () => {
+  if (audioContext.state === 'suspended') {
+    audioContext.resume();
+  }
 }, { once: true });
 
+if (btnVoiceSetup) {
+  btnVoiceSetup.addEventListener('click', () => {
+    if (audioContext.state === 'suspended') audioContext.resume();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'start_voice_setup' }));
+    }
+  });
+}
 
-// UI Events
-btnVoiceSetup.addEventListener('click', () => {
-  if (audioContext.state === 'suspended') audioContext.resume();
-  ws.send(JSON.stringify({ type: 'start_voice_setup' }));
-});
+if (btnUiSetup) {
+  btnUiSetup.addEventListener('click', () => {
+    if (audioContext.state === 'suspended') audioContext.resume();
+    if (!selectSetting || !selectMoral) return;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'story_params',
+        params: {
+          setting: selectSetting.value,
+          moral: selectMoral.value,
+          userIdea: null,
+          userName: null
+        }
+      }));
+    }
+  });
+}
 
-btnUiSetup.addEventListener('click', () => {
-  if (audioContext.state === 'suspended') audioContext.resume();
-  const params = {
-    setting: selectSetting.value,
-    moral: selectMoral.value,
-    userIdea: null,
-    userName: null
-  };
-  ws.send(JSON.stringify({ type: 'story_params', params }));
-});
-
-// Exposed globally for the gesture mock buttons in HTML
-window.sendMockGesture = function(branch) {
-  if(ws.readyState === WebSocket.OPEN) {
+// Mock gesture buttons (HTML: onclick="sendMockGesture('trust')")
+window.sendMockGesture = function (branch) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'gesture_confirmed', branch }));
   }
 };
+
+// ─── Start ────────────────────────────────────────────────────────────────────
 
 connect();

@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const StreamParser = require('./streamParser');
 const { buildSystemPrompt } = require('./promptBuilder');
 
-// These will be implemented next
 const geminiLive = require('./geminiLive');
 const geminiPro = require('./geminiPro');
 const tts = require('./tts');
@@ -17,20 +16,24 @@ function createSessionState(socket) {
   return {
     sessionId: crypto.randomUUID(),
     socket,
-    phase: 'setup', // setup, greeting, narrating, qa_interruption, gesture_capture, resolving, closing
+    phase: 'setup',
     storyParams: null,
     setupMethod: null,
     liveSession: null,
     proSession: null,
     parser: new StreamParser(),
-    ttsQueue: null, 
-    lyriaStream: new lyria.LyriaStream(socket), // Persistent Lyria stream
+    ttsQueue: null,
+    lyriaStream: new lyria.LyriaStream(socket),
     observation: null,
     userName: null,
+    _greetingNarrationScheduled: false, // guard against multiple startNarration calls
   };
 }
 
+// FIX: Add type guard — only try to match if rawText is actually a string.
+// geminiLive.js now only passes strings, but this guard is defensive.
 function extractStoryParams(rawOutput) {
+  if (typeof rawOutput !== 'string') return null;
   const match = rawOutput.match(PARAMS_RE);
   if (!match) return null;
   try {
@@ -41,68 +44,83 @@ function extractStoryParams(rawOutput) {
 }
 
 function extractObservation(rawOutput) {
+  if (typeof rawOutput !== 'string') return null;
   const match = rawOutput.match(OBSERVATION_RE);
   if (!match) return null;
   return match[1].trim();
 }
 
-const LIVE_SETUP_PROMPT = `
-You are FableGenie's setup genie. Your job is to have a short, warm 
-conversation with the user to understand what kind of story they want.
+// ─── System Prompts ───────────────────────────────────────────────────────────
 
-You need to extract three things:
+const LIVE_SETUP_PROMPT = `
+You are FableGenie's setup genie. Have a short, warm conversation with the user
+to understand what kind of story they want.
+
+You need to extract:
 1. A setting or world (e.g. "a jungle", "ancient Egypt", "a snowy village")
 2. A theme or lesson (e.g. "being kind", "not judging by looks", "patience")
 3. Optionally, the user's name
 
-Ask naturally — do not interrogate. One question at a time.
-If they give you a full story idea in one go, that's perfect — use it directly.
-If they are a young child and seem unsure, offer two simple choices.
+Ask naturally — one question at a time. If they give a full idea in one go, use it.
+If they seem unsure, offer two simple choices.
 
-When you have enough to build a story (setting + theme minimum),
-say: "Perfect — let me summon your fable!" and IMMEDIATELY output this JSON 
-on a new line, silently (it will not be spoken):
-<!--STORY_PARAMS:{"setting":"<setting>","moral":"<theme>","userIdea":"<full idea if given or null>","userName":"<name if given or null>"}-->
+When you have enough (setting + theme minimum), say:
+"Perfect — let me summon your fable!"
+Then IMMEDIATELY output this on a new line (it will NOT be spoken):
+<!--STORY_PARAMS:{"setting":"<setting>","moral":"<theme>","userIdea":"<full idea or null>","userName":"<name or null>"}-->
 
-Do not output the JSON until you are ready. Do not mention JSON to the user.
 Maximum 3 conversational turns before committing.
 `.trim();
 
 const LIVE_GESTURE_PROMPT = `
-You are watching the user. They must make a choice with a hand gesture.
-If they cross their arms in an X shape, output EXACTLY this JSON:
+Watch the user carefully. They will make one of two gestures.
+
+Thumbs up or open palm = they choose to TRUST.
+Cross arms in an X shape = they choose to RUN AWAY.
+
+When you are confident, output ONLY this exact JSON — nothing else:
+{"choice": "trust"}
+or
 {"choice": "run_away"}
 
-If they hold out an open palm, output EXACTLY this JSON:
-{"choice": "trust"}
-
-Do not say anything else. Just the JSON. If you are unsure, wait.
+Do not speak. Do not explain. Just the JSON. If unsure, wait.
 `.trim();
 
-async function initSession(socket, previousSessionId = null) {
-  // Real app might recover state from previousSessionId
+// ─── Session Init ─────────────────────────────────────────────────────────────
+
+async function initSession(socket) {
   const session = createSessionState(socket);
   session.ttsQueue = new tts.TTSPipeline(socket);
 
   socket.send(JSON.stringify({ type: 'session_id', id: session.sessionId }));
-  
-  // Wire up the parser events
+
+  // ── Parser event wiring ──
+
   session.parser.on('text', async (text) => {
-    if (session.phase === 'narrating' || session.phase === 'resolving' || session.phase === 'closing') {
+    const activePhases = ['narrating', 'resolving', 'closing'];
+    if (activePhases.includes(session.phase)) {
       await session.ttsQueue.enqueue(text, 'narration');
     }
   });
 
   session.parser.on('imageTag', async (desc) => {
-    const base64 = await imagen.generateImage(desc);
-    if (base64) socket.send(JSON.stringify({ type: 'image', data: base64 }));
+    try {
+      const base64 = await imagen.generateImage(desc);
+      if (base64) socket.send(JSON.stringify({ type: 'image', data: base64 }));
+    } catch (e) {
+      console.warn('[SessionManager] Imagen failed, skipping image:', e.message);
+    }
   });
 
   session.parser.on('moodTag', async (mood) => {
-    if (!session.lyriaStream.isOpen && session.phase === 'narrating') {
-       await session.lyriaStream.open();
+    try {
+      if (!session.lyriaStream.isOpen && session.phase === 'narrating') {
+        await session.lyriaStream.open();
+      }
+      await session.lyriaStream.setMood(mood);
+    } catch (e) {
+      console.warn('[SessionManager] Lyria mood update failed:', e.message);
     }
-    await session.lyriaStream.setMood(mood);
   });
 
   session.parser.on('microMoment', (question) => {
@@ -112,38 +130,43 @@ async function initSession(socket, previousSessionId = null) {
   session.parser.on('branchChoice', async () => {
     session.phase = 'gesture_capture';
     socket.send(JSON.stringify({ type: 'gesture_prompt' }));
-    
-    // Switch live session to gesture mode
+
     if (session.liveSession) {
+      // Swap to gesture detection mode
       await session.liveSession.swapSystemPrompt(LIVE_GESTURE_PROMPT);
-      // Ensure we listen for gesture
       session.liveSession.onOutput((raw) => {
         if (session.phase !== 'gesture_capture') return;
+        if (typeof raw !== 'string') return;
         try {
-          const res = JSON.parse(raw);
+          const res = JSON.parse(raw.trim());
           if (res.choice === 'trust' || res.choice === 'run_away') {
+            console.log(`[SessionManager] Gesture confirmed: ${res.choice}`);
             socket.send(JSON.stringify({ type: 'gesture_confirmed', branch: res.choice }));
             handleBranchResult(session, res.choice);
           }
-        } catch(e) {}
+        } catch (e) { /* not JSON yet, still watching */ }
       });
     }
   });
 
   session.parser.on('storyEnd', () => {
     session.phase = 'closing';
-    session.lyriaStream.close();
+    session.lyriaStream.close().catch(() => { });
+    console.log('[SessionManager] Story ended, session closing');
   });
+
+  // ── WebSocket message handler ──
 
   socket.on('message', async (raw) => {
     let msg;
-    try { msg = JSON.parse(raw); } catch (e) { return; }
+    try { msg = JSON.parse(raw); } catch { return; }
 
     if (msg.type === 'start_voice_setup' && session.phase === 'setup') {
       await startVoiceSetup(session);
-    } 
+    }
     else if (msg.type === 'story_params' && session.phase === 'setup') {
       session.storyParams = msg.params;
+      session.userName = msg.params?.userName || null;
       session.setupMethod = 'ui';
       await transitionToGreeting(session);
     }
@@ -151,123 +174,213 @@ async function initSession(socket, previousSessionId = null) {
       session.ttsQueue.advance(msg.chunkIndex);
     }
     else if (msg.type === 'webrtc_audio' && session.liveSession) {
-      // Forward real-time audio blobs to Gemini Live
       session.liveSession.sendAudio(msg.data);
     }
     else if (msg.type === 'webrtc_video' && session.liveSession) {
-      // Forward real-time video blobs to Gemini Live
       session.liveSession.sendVideo(msg.data);
     }
     else if (msg.type === 'gesture_confirmed' && session.phase === 'gesture_capture') {
-       // Manual UI override
-       handleBranchResult(session, msg.branch);
+      // Manual UI override (mock gesture buttons)
+      handleBranchResult(session, msg.branch);
     }
   });
 
   return session;
 }
 
+// ─── Phase 0: Voice Setup ─────────────────────────────────────────────────────
+
 async function startVoiceSetup(session) {
   session.setupMethod = 'voice';
-  
-  session.liveSession = await geminiLive.create(LIVE_SETUP_PROMPT);
-  session.socket.send(JSON.stringify({ type: 'setup_listening' }));
+  console.log('[SessionManager] Starting voice setup...');
 
-  session.liveSession.onOutput(async (rawText) => {
-    if (session.phase !== 'setup') return;
+  try {
+    session.liveSession = await geminiLive.create(LIVE_SETUP_PROMPT);
+    session.socket.send(JSON.stringify({ type: 'setup_listening' }));
 
-    const params = extractStoryParams(rawText);
-    if (params) {
-      session.storyParams = params;
-      session.userName = params.userName;
-      await transitionToGreeting(session);
-      return;
-    }
-    
-    // No params yet — forward speech to TTS
-    const spokenText = rawText.replace(PARAMS_RE, '').trim();
-    if (spokenText) await session.ttsQueue.enqueue(spokenText, 'setup');
-  });
+    session.liveSession.onOutput(async (rawText) => {
+      if (session.phase !== 'setup') return;
+      if (typeof rawText !== 'string') return;
+
+      const params = extractStoryParams(rawText);
+      if (params) {
+        console.log('[SessionManager] Story params extracted from voice:', params);
+        session.storyParams = params;
+        session.userName = params.userName || null;
+        await transitionToGreeting(session);
+        return;
+      }
+
+      // Strip the params tag before speaking (shouldn't appear in voice output
+      // but defensive)
+      const spokenText = rawText.replace(PARAMS_RE, '').trim();
+      if (spokenText) {
+        await session.ttsQueue.enqueue(spokenText, 'setup');
+      }
+    });
+  } catch (e) {
+    console.error('[SessionManager] Voice setup failed:', e.message);
+    // Graceful fallback: tell client to use UI cards instead
+    session.socket.send(JSON.stringify({
+      type: 'setup_fallback',
+      reason: 'Voice setup unavailable. Please select your story below.'
+    }));
+  }
 }
 
+// ─── Phase 1: Greeting ────────────────────────────────────────────────────────
+
 async function transitionToGreeting(session) {
+  if (session.phase === 'greeting') return; // guard against double calls
   session.phase = 'greeting';
+  session._greetingNarrationScheduled = false;
+
   session.socket.send(JSON.stringify({ type: 'setup_ready' }));
+  console.log('[SessionManager] Transitioning to greeting phase...');
 
   const greetingPrompt = `
-You can see the user through their webcam. Give them a personalized, 
-magical greeting acknowledging their room or appearance.
+You are FableGenie, a warm and magical storyteller for children aged 6–12.
+You can see the user through their webcam right now.
+Give them a warm, personal greeting (3 sentences maximum).
+Mention ONE specific thing you notice about their visible environment.
 ${session.userName ? `The user's name is ${session.userName}. Use it warmly.` : ''}
 
-After your greeting, silently output this EXACT format so we can save your observation:
-<!--OBSERVATION: a short summary of what you saw-->
+After your greeting, output this EXACT line silently (it will NOT be spoken):
+<!--OBSERVATION: one sentence describing what you noticed-->
 
-Do not speak the observation tag.
+Never speak the observation tag.
   `.trim();
 
-  if (!session.liveSession) {
-     session.liveSession = await geminiLive.create(greetingPrompt);
-  } else {
-     await session.liveSession.swapSystemPrompt(greetingPrompt);
+  try {
+    if (!session.liveSession) {
+      session.liveSession = await geminiLive.create(greetingPrompt);
+    } else {
+      await session.liveSession.swapSystemPrompt(greetingPrompt);
+    }
+  } catch (e) {
+    console.error('[SessionManager] Greeting session init failed:', e.message);
+    // Skip greeting, go straight to narration
+    await startNarration(session);
+    return;
   }
+
+  // Accumulate all greeting text chunks for observation extraction
+  // (the observation tag might come at the end of the full response,
+  //  not necessarily in the first chunk)
+  let greetingTextAccumulated = '';
 
   session.liveSession.onOutput(async (rawText) => {
     if (session.phase !== 'greeting') return;
+    if (typeof rawText !== 'string') return;
 
-    const obs = extractObservation(rawText);
-    if (obs) session.observation = obs;
+    greetingTextAccumulated += rawText;
 
+    // Try to extract observation from accumulated text
+    const obs = extractObservation(greetingTextAccumulated);
+    if (obs && !session.observation) {
+      session.observation = obs;
+      console.log(`[SessionManager] Observation stored: "${obs}"`);
+    }
+
+    // Strip the observation tag before sending to TTS
     const spokenText = rawText.replace(OBSERVATION_RE, '').trim();
     if (spokenText) {
       await session.ttsQueue.enqueue(spokenText, 'greeting');
     }
-
-    // Auto transition to Phase 2 after greeting
-    if (obs || rawText.length > 50) { 
-       // Start narrative
-       setTimeout(() => startNarration(session), 4000); 
-    }
   });
 
-  // Kick off the greeting manually 
-  await session.liveSession.sendText("Please greet the user now.");
+  // FIX 3: Use onTurnComplete to know when the greeting is DONE.
+  // This replaces the unreliable rawText.length > 50 heuristic.
+  // turnComplete fires once when Gemini finishes its full response.
+  session.liveSession.onTurnComplete(async () => {
+    if (session.phase !== 'greeting') return;
+    if (session._greetingNarrationScheduled) return; // prevent double scheduling
+    session._greetingNarrationScheduled = true;
+
+    console.log('[SessionManager] Greeting complete. Starting narration in 3s...');
+    // Small delay so the last TTS chunk has time to start playing
+    setTimeout(() => startNarration(session), 3000);
+  });
+
+  // Kick off the greeting — safe to call now because initialize()
+  // has already waited for setupComplete before returning
+  await session.liveSession.sendText('Please greet the user now.');
 }
+
+// ─── Phase 2: Narration ───────────────────────────────────────────────────────
 
 async function startNarration(session) {
   if (session.phase === 'narrating') return;
   session.phase = 'narrating';
+  console.log('[SessionManager] Starting narration phase...');
 
-  const sysPrompt = buildSystemPrompt({ 
-    ...session.storyParams, 
-    userName: session.userName 
-  });
+  if (!session.storyParams) {
+    console.warn('[SessionManager] No storyParams set — using defaults');
+    session.storyParams = {
+      setting: 'an African savanna',
+      moral: 'trust must be earned',
+      userIdea: null,
+      userName: session.userName
+    };
+  }
 
-  session.proSession = await geminiPro.create(sysPrompt);
+  let sysPrompt;
+  try {
+    sysPrompt = buildSystemPrompt({
+      ...session.storyParams,
+      userName: session.userName
+    });
+  } catch (e) {
+    console.error('[SessionManager] buildSystemPrompt failed:', e.message);
+    return;
+  }
+
+  try {
+    session.proSession = await geminiPro.create(sysPrompt);
+  } catch (e) {
+    console.error('[SessionManager] Gemini Pro init failed:', e.message);
+    return;
+  }
+
   session.proSession.onChunk((chunk) => {
     session.parser.feed(chunk);
   });
 
-  // Start the generation stream
-  await session.proSession.generateTurn("Begin the fable.");
+  try {
+    await session.proSession.generateTurn('Begin the fable.');
+  } catch (e) {
+    console.error('[SessionManager] generateTurn failed:', e.message);
+  }
 }
+
+// ─── Phase 4: Branch Resolution ──────────────────────────────────────────────
 
 async function handleBranchResult(session, branch) {
   if (session.phase !== 'gesture_capture') return;
   session.phase = 'resolving';
+  console.log(`[SessionManager] Branch chosen: ${branch}`);
 
-  // Trigger Veo Video
+  const videoFile = branch === 'trust'
+    ? 'trust_resolution.mp4'
+    : 'run_away_resolution.mp4';
+
   try {
-    const videoUrl = await gcs.getSignedUrl(branch === 'trust' ? 'trust_resolution.mp4' : 'run_away_resolution.mp4');
+    const videoUrl = await gcs.getSignedUrl(videoFile);
     if (videoUrl) {
       session.socket.send(JSON.stringify({ type: 'branch_video', url: videoUrl }));
     }
-  } catch (error) {
-    console.warn('[SessionManager] Veo video fetch failed, falling back to Imagen slideshow.');
+  } catch (e) {
+    console.warn('[SessionManager] GCS video unavailable, falling back to slideshow:', e.message);
     session.socket.send(JSON.stringify({ type: 'video_unavailable' }));
   }
 
-  // Tell Pro to continue
-  await session.proSession.generateTurn(`The listener chose: ${branch}`);
+  if (session.proSession) {
+    try {
+      await session.proSession.generateTurn(`The listener chose: ${branch}`);
+    } catch (e) {
+      console.error('[SessionManager] Resolution generation failed:', e.message);
+    }
+  }
 }
 
 module.exports = { initSession };
