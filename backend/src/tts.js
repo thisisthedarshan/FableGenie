@@ -1,9 +1,15 @@
 const { VertexAI } = require('@google-cloud/vertexai');
 
-const vertexAI = new VertexAI({
-  project: process.env.GOOGLE_CLOUD_PROJECT,
-  location: process.env.VERTEX_AI_LOCATION,
-});
+let vertexAI = null;
+function getVertexAI() {
+  if (!vertexAI) {
+    vertexAI = new VertexAI({
+      project: process.env.GOOGLE_CLOUD_PROJECT,
+      location: process.env.VERTEX_AI_LOCATION,
+    });
+  }
+  return vertexAI;
+}
 const MODEL_NAME = 'gemini-2.5-flash-preview-tts';
 
 class TTSPipeline {
@@ -65,7 +71,7 @@ class TTSPipeline {
       const prefix = stylePrefixMap[toSynthesize.phase] || '[speak slowly and warmly]';
       const prompt = `${prefix} ${toSynthesize.text}`;
       
-      const model = vertexAI.getGenerativeModel({ model: MODEL_NAME });
+      const model = getVertexAI().getGenerativeModel({ model: MODEL_NAME });
       const response = await model.generateContent({
         contents: [{role: 'user', parts: [{text: prompt}]}]
       });

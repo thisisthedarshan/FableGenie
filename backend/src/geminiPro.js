@@ -1,16 +1,22 @@
 const { VertexAI } = require('@google-cloud/vertexai');
 
-const vertexAI = new VertexAI({
-  project: process.env.GOOGLE_CLOUD_PROJECT,
-  location: process.env.VERTEX_AI_LOCATION,
-});
+let vertexAI = null;
+function getVertexAI() {
+  if (!vertexAI) {
+    vertexAI = new VertexAI({
+      project: process.env.GOOGLE_CLOUD_PROJECT,
+      location: process.env.VERTEX_AI_LOCATION,
+    });
+  }
+  return vertexAI;
+}
 
-const MODEL_NAME = 'gemini-2.5-pro-preview-06-05';
+const MODEL_NAME = 'gemini-2.5-pro';
 
 class GeminiProSession {
   constructor(systemPrompt) {
     this.systemPrompt = systemPrompt;
-    const generativeModel = vertexAI.getGenerativeModel({
+    const generativeModel = getVertexAI().getGenerativeModel({
       model: MODEL_NAME,
       systemInstruction: systemPrompt,
       generationConfig: {

@@ -1,11 +1,17 @@
 const { VertexAI } = require('@google-cloud/vertexai');
 
-const vertexAI = new VertexAI({
-  project: process.env.GOOGLE_CLOUD_PROJECT,
-  location: process.env.VERTEX_AI_LOCATION,
-});
+let vertexAI = null;
+function getVertexAI() {
+  if (!vertexAI) {
+    vertexAI = new VertexAI({
+      project: process.env.GOOGLE_CLOUD_PROJECT,
+      location: process.env.VERTEX_AI_LOCATION,
+    });
+  }
+  return vertexAI;
+}
 
-const MODEL_NAME = 'imagen-3.0-generate-001';
+const MODEL_NAME = 'imagen-4.0-generate-001';
 
 const IMAGEN_STYLE_PREFIX =
   "Children's watercolor illustration, warm earthy tones, soft diffused edges, " +
@@ -19,7 +25,7 @@ async function generateImage(sceneDescription) {
     // In VertexAI SDK for Node.js, Imagen usually requires using the predictor client directly 
     // or through getGenerativeModel with specific input formats.
     // Adjusting to a generic prediction format compatible with Vertex AI Imagen 3:
-    const model = vertexAI.getGenerativeModel({ model: MODEL_NAME });
+    const model = getVertexAI().getGenerativeModel({ model: MODEL_NAME });
     
     // Using a more raw prediction structure common in vertex for Imagen if needed,
     // but typically generateContent still works if properly supported in standard wrapper:

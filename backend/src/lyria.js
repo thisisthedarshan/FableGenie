@@ -1,9 +1,15 @@
 const { VertexAI } = require('@google-cloud/vertexai');
 
-const vertexAI = new VertexAI({
-  project: process.env.GOOGLE_CLOUD_PROJECT,
-  location: process.env.VERTEX_AI_LOCATION,
-});
+let vertexAI = null;
+function getVertexAI() {
+  if (!vertexAI) {
+    vertexAI = new VertexAI({
+      project: process.env.GOOGLE_CLOUD_PROJECT,
+      location: process.env.VERTEX_AI_LOCATION,
+    });
+  }
+  return vertexAI;
+}
 
 const MODEL_NAME = 'lyria-realtime-exp';
 
@@ -17,7 +23,7 @@ class LyriaStream {
   async open() {
     console.log('[Lyria] Opening persistent ambient stream...');
     try {
-      const generativeModel = vertexAI.getGenerativeModel({ model: MODEL_NAME });
+      const generativeModel = getVertexAI().getGenerativeModel({ model: MODEL_NAME });
       this.session = generativeModel.startChat({});
       this.isOpen = true;
       // Start streaming loop here if the SDK requires pulling

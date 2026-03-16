@@ -228,6 +228,9 @@ Do not speak the observation tag.
        setTimeout(() => startNarration(session), 4000); 
     }
   });
+
+  // Kick off the greeting manually 
+  await session.liveSession.sendText("Please greet the user now.");
 }
 
 async function startNarration(session) {
