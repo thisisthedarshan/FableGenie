@@ -3,7 +3,7 @@ const { EventEmitter } = require('events');
 // Minimum characters to accumulate before emitting a text chunk to TTS.
 // Small chunks = many small API calls = gaps between sentences.
 // Larger chunks = fewer calls = smoother narration flow.
-const MIN_CHUNK_CHARS = 180;
+const MIN_CHUNK_CHARS = 100;
 
 class StreamParser extends EventEmitter {
   constructor() {

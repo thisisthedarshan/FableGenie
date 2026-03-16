@@ -66,6 +66,8 @@ function connect() {
       // ── Theater mode transition ──────────────────────────────────────────
       case 'setup_ready': {
         storyStarted = true;
+        // Stop voice setup mic if it was active
+        mediaManager.stopCapture();
         // Sections use CSS opacity + .active class — style.display does nothing
         if (setupScreen) setupScreen.classList.remove('active');
         if (theaterMode) theaterMode.classList.add('active');
@@ -119,7 +121,8 @@ function connect() {
           }
         }
         // Pass mimeType so decoder knows if it's raw PCM or encoded audio
-        await playTTSChunk(msg.data, msg.chunkIndex, msg.mimeType || 'audio/pcm;rate=24000');
+        // Pass image data to playback so it shows when audio starts
+        await playTTSChunk(msg.audio, msg.image, msg.chunkIndex, msg.mimeType || 'audio/pcm;rate=24000');
         break;
       }
 
@@ -164,13 +167,23 @@ function connect() {
         }
         break;
 
+      // ── Branch reached — TTS queue has caught up to [BRANCH_CHOICE] ─────
+      case 'tts_branch_reached':
+        showBranchOverlay();
+        break;
+
       // ── Gesture overlay — only shows when [BRANCH_CHOICE] fires ──────────
       case 'gesture_prompt':
         if (gestureOverlay) gestureOverlay.classList.remove('hidden');
         break;
 
       case 'gesture_confirmed':
-        if (gestureOverlay) gestureOverlay.classList.add('hidden');
+        hideBranchOverlay();
+        break;
+
+      case 'branch_voice_failed':
+        // Voice detection failed — buttons still work as fallback
+        console.warn('[Branch] Voice detection failed — use tap buttons');
         break;
 
       // ── Gemini Live audio (greeting phase — raw PCM 24kHz mono) ──────────
@@ -199,12 +212,12 @@ function connect() {
 // decodeAudioData only handles encoded formats and will throw on raw PCM.
 // Decode manually: base64 → Uint8Array → Int16Array → Float32Array → AudioBuffer.
 
-async function playTTSChunk(base64Data, chunkIndex, mimeType) {
+async function playTTSChunk(audioBase64, imageBase64, chunkIndex, mimeType) {
   const ctx = getAudioContext();
   if (ctx.state === 'suspended') await ctx.resume();
 
   try {
-    const bytes = base64ToBytes(base64Data);
+    const bytes = base64ToBytes(audioBase64);
 
     // Parse sample rate from mimeType string e.g. "audio/pcm;rate=24000"
     let sampleRate = 24000; // TTS default
@@ -229,6 +242,15 @@ async function playTTSChunk(base64Data, chunkIndex, mimeType) {
 
     const now = ctx.currentTime;
     const playAt = Math.max(now, nextTTSPlayTime);
+
+    // Schedule image display to match audio start
+    const delayMs = (playAt - now) * 1000;
+    setTimeout(() => {
+      if (imageBase64) {
+        showIllustration(imageBase64, 'png');
+      }
+    }, Math.max(0, delayMs));
+
     source.start(playAt);
     nextTTSPlayTime = playAt + audioBuffer.duration;
 
@@ -380,21 +402,124 @@ function stopAmbience() {
   ambienceMasterGain = null;
 }
 
-// ─── Illustration ─────────────────────────────────────────────────────────────
+// ─── Illustration (Crossfade) ─────────────────────────────────────────────
+// Double-buffer approach: create a new <img>, fade it in over the old one,
+// then remove the old one. Ensures smooth transitions with proper sizing.
 
 function showIllustration(base64Data, mimeType) {
   if (!imageContainer) return;
-  const img = new Image();
-  img.onload = () => {
-    imageContainer.style.opacity = '0';
-    imageContainer.style.backgroundImage = `url(${img.src})`;
-    imageContainer.style.transition = 'opacity 1.2s ease-in';
-    void imageContainer.offsetWidth; // force reflow so transition fires
-    imageContainer.style.opacity = '1';
-    console.log('[Image] Illustration displayed');
+
+  const newImg = document.createElement('img');
+  newImg.className = 'illustration-layer';
+  newImg.alt = 'Story illustration';
+  newImg.src = `data:image/${mimeType};base64,${base64Data}`;
+
+  newImg.onload = () => {
+    // Append behind current, then crossfade
+    imageContainer.appendChild(newImg);
+    void newImg.offsetWidth; // force reflow so CSS transition fires
+    newImg.classList.add('active');
+
+    // Fade out and remove all older layers after transition completes
+    const oldLayers = imageContainer.querySelectorAll('.illustration-layer:not(:last-child)');
+    oldLayers.forEach(layer => {
+      layer.classList.remove('active');
+      setTimeout(() => {
+        if (layer.parentNode) layer.parentNode.removeChild(layer);
+      }, 1300); // slightly longer than CSS transition (1.2s)
+    });
+
+    console.log('[Image] Illustration crossfaded in');
   };
-  img.onerror = () => console.error('[Image] Failed to load illustration');
-  img.src = `data:image/${mimeType};base64,${base64Data}`;
+  newImg.onerror = () => console.error('[Image] Failed to load illustration');
+}
+
+// ─── Branch Overlay ───────────────────────────────────────────────────────────
+
+let branchMicActive = false;
+
+function showBranchOverlay() {
+  if (gestureOverlay) gestureOverlay.classList.remove('hidden');
+
+  // Start mic recording for voice-based branch detection
+  startBranchMic();
+
+  // Send branch_ready so the backend activates Gemini Live gesture mode
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'branch_ready' }));
+  }
+
+  // Timeout: if no branch chosen in 15s, prompt user to tap
+  setTimeout(() => {
+    if (gestureOverlay && !gestureOverlay.classList.contains('hidden')) {
+      const indicator = document.getElementById('branch-recording-indicator');
+      if (indicator) indicator.innerHTML = '<span>Didn\'t catch that — please tap your choice</span>';
+    }
+  }, 15000);
+}
+
+function hideBranchOverlay() {
+  if (gestureOverlay) gestureOverlay.classList.add('hidden');
+  stopBranchMic();
+}
+
+async function startBranchMic() {
+  if (branchMicActive) return;
+  branchMicActive = true;
+
+  const indicator = document.getElementById('branch-recording-indicator');
+  if (indicator) indicator.classList.remove('hidden');
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      video: false
+    });
+
+    const micCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const source = micCtx.createMediaStreamSource(stream);
+    const processor = micCtx.createScriptProcessor(4096, 1, 1);
+
+    processor.onaudioprocess = (e) => {
+      if (!branchMicActive) return;
+      const f32 = e.inputBuffer.getChannelData(0);
+      const i16 = new Int16Array(f32.length);
+      for (let i = 0; i < f32.length; i++) {
+        i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32768));
+      }
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(i16.buffer)));
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'branch_voice_audio', data: b64 }));
+      }
+    };
+
+    source.connect(processor);
+    processor.connect(micCtx.destination);
+
+    // Store references for cleanup
+    window._branchMicStream = stream;
+    window._branchMicCtx = micCtx;
+    window._branchProcessor = processor;
+
+    console.log('[Branch] Mic recording started for voice choice');
+  } catch (e) {
+    console.warn('[Branch] Mic unavailable:', e.message);
+    branchMicActive = false;
+  }
+}
+
+function stopBranchMic() {
+  branchMicActive = false;
+  const indicator = document.getElementById('branch-recording-indicator');
+  if (indicator) indicator.classList.add('hidden');
+
+  if (window._branchProcessor) { window._branchProcessor.disconnect(); window._branchProcessor = null; }
+  if (window._branchMicCtx) { window._branchMicCtx.close(); window._branchMicCtx = null; }
+  if (window._branchMicStream) {
+    window._branchMicStream.getTracks().forEach(t => t.stop());
+    window._branchMicStream = null;
+  }
+  console.log('[Branch] Mic recording stopped');
 }
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
@@ -542,6 +667,9 @@ if (btnVoiceSetup) {
     getAudioContext().resume();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'start_voice_setup' }));
+      // Start streaming mic audio to the backend for Gemini Live
+      await mediaManager.startMicStreaming();
+      console.log('[Voice Setup] Mic streaming started');
     }
   });
 }

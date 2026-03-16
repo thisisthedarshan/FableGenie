@@ -1,4 +1,6 @@
 const { GoogleGenAI } = require('@google/genai');
+const imagen = require('./imagen');
+const imagePrompter = require('./imagePrompter');
 
 let genAI = null;
 function getGenAI() {
@@ -14,6 +16,9 @@ function getGenAI() {
 
 const MODEL_NAME = 'gemini-2.5-flash-preview-tts';
 
+// Minimum gap between Imagen calls to avoid quota exhaustion
+const IMAGEN_MIN_GAP_MS = 12000;
+
 class TTSPipeline {
   constructor(socket) {
     this.socket = socket;
@@ -22,6 +27,7 @@ class TTSPipeline {
     this.currentPlayIndex = 0;
     this.nextChunkIndex = 0;
     this.lookahead = 4; // synthesize 4 chunks ahead of playback (was 2)
+    this.lastImageTime = 0; // rate-limit Imagen calls
   }
 
   async enqueue(text, phase) {
@@ -30,7 +36,25 @@ class TTSPipeline {
       phase,
       chunkIndex: this.nextChunkIndex++,
       audioBase64: null,
+      imageBase64: null,
       status: 'pending' // pending, synthesizing, ready, played
+    });
+    this.processQueue();
+  }
+
+  /**
+   * Enqueue a branch marker. When the TTS queue reaches this item
+   * (i.e. all preceding audio has been sent), it fires a
+   * tts_branch_reached WebSocket message instead of synthesizing audio.
+   */
+  enqueueBranchMarker() {
+    this.queue.push({
+      text: null,
+      phase: 'branch_marker',
+      chunkIndex: this.nextChunkIndex++,
+      audioBase64: null,
+      imageBase64: null,
+      status: 'pending'
     });
     this.processQueue();
   }
@@ -54,60 +78,73 @@ class TTSPipeline {
       return;
     }
 
+    // ── Branch marker: fire signal instead of synthesizing ──
+    if (toSynthesize.phase === 'branch_marker') {
+      toSynthesize.status = 'ready';
+      console.log(`[TTS] Branch marker reached at chunk ${toSynthesize.chunkIndex}`);
+      this.socket.send(JSON.stringify({ type: 'tts_branch_reached' }));
+      toSynthesize.status = 'played';
+      // Don't continue processing — wait for branch resolution
+      return;
+    }
+
     this.isSynthesizing = true;
     toSynthesize.status = 'synthesizing';
 
     try {
       console.log(`[TTS] Synthesizing chunk ${toSynthesize.chunkIndex}...`);
 
-      const stylePrefixMap = {
-        setup: '[speak naturally and warmly]',
-        greeting: '[speak naturally and warmly]',
-        narration: '[speak naturally and warmly]',
-        qa_answer: '[speak conversationally]',
-        closing: '[speak gently and warmly]',
-      };
-
-      const prefix = stylePrefixMap[toSynthesize.phase] || '[speak naturally]';
+      const prefix = (toSynthesize.phase === 'qa_answer') ? '[speak conversationally]' : '[speak naturally and warmly]';
       const prompt = `${prefix} ${toSynthesize.text}`;
 
       const ai = getGenAI();
 
-      const response = await ai.models.generateContent({
+      // Parallelize TTS and Image Generation
+      const ttsPromise = ai.models.generateContent({
         model: MODEL_NAME,
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: {
           responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: 'Kore'
-              }
-            }
-          }
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } }
         }
       });
 
+      // Rate-limit Imagen: skip image if less than IMAGEN_MIN_GAP_MS since last
+      let imagePromise = Promise.resolve(null);
+      const now = Date.now();
+      const canGenerateImage = (now - this.lastImageTime) >= IMAGEN_MIN_GAP_MS;
+
+      if (toSynthesize.phase === 'narration' && canGenerateImage) {
+        this.lastImageTime = now; // claim slot immediately to prevent races
+        imagePromise = (async () => {
+          const visualPrompt = await imagePrompter.getVisualPrompt(toSynthesize.text);
+          return await imagen.generateImage(visualPrompt);
+        })();
+      } else if (toSynthesize.phase === 'narration') {
+        console.log(`[TTS] Skipping image for chunk ${toSynthesize.chunkIndex} (rate limit: ${Math.round((IMAGEN_MIN_GAP_MS - (now - this.lastImageTime)) / 1000)}s remaining)`);
+      }
+
+      const [ttsResponse, imageBase64] = await Promise.all([ttsPromise, imagePromise]);
+
       let inlineData = null;
-      if (response && response.candidates && response.candidates[0].content && response.candidates[0].content.parts) {
-        const parts = response.candidates[0].content.parts;
-        const audioPart = parts.find(p => p.inlineData && p.inlineData.data);
-        if (audioPart) {
-          inlineData = audioPart.inlineData;
-        }
+      if (ttsResponse && ttsResponse.candidates?.[0]?.content?.parts) {
+        const audioPart = ttsResponse.candidates[0].content.parts.find(p => p.inlineData && p.inlineData.data);
+        if (audioPart) inlineData = audioPart.inlineData;
       }
 
       if (inlineData) {
         toSynthesize.audioBase64 = inlineData.data;
+        toSynthesize.imageBase64 = imageBase64;
         toSynthesize.status = 'ready';
 
         this.socket.send(JSON.stringify({
           type: 'tts_audio',
-          data: toSynthesize.audioBase64,
+          audio: toSynthesize.audioBase64,
+          image: toSynthesize.imageBase64, // could be null
           mimeType: inlineData.mimeType || 'audio/L16;codec=pcm;rate=24000',
           chunkIndex: toSynthesize.chunkIndex
         }));
-        console.log(`[TTS] Chunk ${toSynthesize.chunkIndex} ready — mimeType: ${inlineData.mimeType}`);
+        console.log(`[TTS] Chunk ${toSynthesize.chunkIndex} ready (Sync Image: ${imageBase64 ? 'YES' : 'NO'})`);
       } else {
         console.warn(`[TTS] No audio data returned for chunk ${toSynthesize.chunkIndex}`);
         toSynthesize.status = 'played';

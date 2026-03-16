@@ -115,28 +115,6 @@ async function initSession(socket) {
     }
   });
 
-  session.parser.on('imageTag', async (desc) => {
-    const now = Date.now();
-    if (now - session.lastImagenCallTime < IMAGEN_MIN_GAP_MS) {
-      console.log(`[SessionManager] Skipping Imagen call for "${desc.substring(0, 40)}" (throttled)`);
-      return;
-    }
-    session.lastImagenCallTime = now;
-
-    try {
-      const base64 = await imagen.generateImage(desc);
-      if (base64) {
-        session.storyImages = session.storyImages || [];
-        session.storyImages.push(base64);
-        console.log(`[SessionManager] Sending image to client (${Math.round(base64.length * 0.75 / 1024)}KB)`);
-        socket.send(JSON.stringify({ type: 'image', data: base64 }));
-      } else {
-        console.warn('[SessionManager] Imagen returned null — skipping');
-      }
-    } catch (e) {
-      console.warn('[SessionManager] Imagen failed:', e.message);
-    }
-  });
 
   session.parser.on('moodTag', async (mood) => {
     // Always send mood_change immediately — frontend Web Audio synthesis fires
@@ -158,27 +136,18 @@ async function initSession(socket) {
   });
 
   session.parser.on('branchChoice', async () => {
-    session.phase = 'gesture_capture';
-    // TODO: Re-enable gesture overlay when camera gesture detection is implemented.
-    // For now, suppress the popup and go straight to voice fallback.
-    // socket.send(JSON.stringify({ type: 'gesture_prompt' }));
-
-    if (session.liveSession) {
-      await session.liveSession.swapSystemPrompt(LIVE_GESTURE_PROMPT);
-      session.liveSession.onOutput((raw) => {
-        if (session.phase !== 'gesture_capture') return;
-        if (typeof raw !== 'string') return;
-        try {
-          const res = JSON.parse(raw.trim());
-          if (res.choice === 'trust' || res.choice === 'run_away') {
-            console.log(`[SessionManager] Gesture confirmed: ${res.choice}`);
-            socket.send(JSON.stringify({ type: 'gesture_confirmed', branch: res.choice }));
-            handleBranchResult(session, res.choice);
-          }
-        } catch (e) { /* not JSON yet */ }
-      });
-    }
+    // Don't activate gesture mode immediately — the TTS queue is still playing
+    // earlier chunks. Instead, enqueue a branch marker so the popup only shows
+    // after all preceding audio has been sent to the frontend.
+    console.log('[SessionManager] [BRANCH_CHOICE] tag parsed — enqueueing branch marker in TTS pipeline');
+    session.ttsQueue.enqueueBranchMarker();
   });
+
+  // ── Internal handler: TTS queue drained up to branch marker ──
+  // This is triggered when the TTS pipeline reaches the branch marker item.
+  // We listen for it via a WebSocket message the server sends to itself? No —
+  // we need to wire this differently. The tts_branch_reached is sent to the
+  // *client* who then sends back a branch_ready message after showing the UI.
 
   session.parser.on('storyEnd', () => {
     session.phase = 'closing';
@@ -223,15 +192,29 @@ async function initSession(socket) {
     else if (msg.type === 'tts_done') {
       session.ttsQueue.advance(msg.chunkIndex);
     }
+    else if (msg.type === 'branch_ready' && session.phase === 'narrating') {
+      // Frontend confirmed the branch UI is visible and mic is active.
+      // Now activate voice-based branch detection via Gemini Live.
+      await activateBranchDetection(session);
+    }
+    else if (msg.type === 'branch_voice_audio' && session.phase === 'gesture_capture') {
+      // Forward branch mic audio to the Live session for interpretation
+      if (session.liveSession) {
+        session.liveSession.sendAudio(msg.data);
+      }
+    }
     else if (msg.type === 'webrtc_audio' && session.liveSession) {
       session.liveSession.sendAudio(msg.data);
     }
     else if (msg.type === 'webrtc_video' && session.liveSession) {
       session.liveSession.sendVideo(msg.data);
     }
-    else if (msg.type === 'gesture_confirmed' && session.phase === 'gesture_capture') {
-      // Manual UI override (mock gesture buttons)
-      handleBranchResult(session, msg.branch);
+    else if (msg.type === 'gesture_confirmed') {
+      // Manual UI override (tap-to-choose buttons)
+      if (session.phase === 'gesture_capture' || session.phase === 'narrating') {
+        session.phase = 'gesture_capture'; // normalize
+        handleBranchResult(session, msg.branch);
+      }
     }
   });
 
@@ -477,6 +460,50 @@ async function startNarration(session) {
     await session.proSession.generateTurn('Begin the fable.');
   } catch (e) {
     console.error('[SessionManager] generateTurn failed:', e.message);
+  }
+}
+
+// ─── Phase 3: Voice Branch Detection ─────────────────────────────────────────
+
+async function activateBranchDetection(session) {
+  session.phase = 'gesture_capture';
+  console.log('[SessionManager] Activating voice-based branch detection...');
+
+  try {
+    if (!session.liveSession) {
+      session.liveSession = await geminiLive.create(LIVE_GESTURE_PROMPT);
+    } else {
+      await session.liveSession.swapSystemPrompt(LIVE_GESTURE_PROMPT);
+    }
+
+    session.liveSession.onOutput((raw) => {
+      if (session.phase !== 'gesture_capture') return;
+      if (typeof raw !== 'string') return;
+      try {
+        const res = JSON.parse(raw.trim());
+        if (res.choice === 'trust' || res.choice === 'run_away') {
+          console.log(`[SessionManager] Voice branch confirmed: ${res.choice}`);
+          session.socket.send(JSON.stringify({ type: 'gesture_confirmed', branch: res.choice }));
+          handleBranchResult(session, res.choice);
+        }
+      } catch (e) { /* not JSON yet — partial output, wait for more */ }
+    });
+
+    session.liveSession.onAudio((base64) => {
+      // Gemini Live might speak in gesture mode — forward audio if it does
+      session.socket.send(JSON.stringify({ type: 'live_audio', data: base64 }));
+    });
+
+    // Send a text prompt to prime the model
+    await session.liveSession.sendText(
+      'The listener is about to make a choice. Listen to their voice. ' +
+      'They will either say "trust" (or similar positive words) or "run away" (or similar escape words). ' +
+      'Output only the JSON when you detect their choice.'
+    );
+  } catch (e) {
+    console.error('[SessionManager] Branch detection init failed:', e.message);
+    // Voice failed — frontend buttons still work as fallback
+    session.socket.send(JSON.stringify({ type: 'branch_voice_failed' }));
   }
 }
 

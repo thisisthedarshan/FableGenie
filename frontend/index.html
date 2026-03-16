@@ -136,17 +136,22 @@
       <div id="gesture-overlay" class="hidden">
         <div class="gesture-instructions glass-panel">
           <h2>Make your choice!</h2>
+          <p class="branch-voice-prompt">Speak your choice — say "Trust" or "Run Away"</p>
+          <div id="branch-recording-indicator" class="recording-indicator hidden">
+            <span class="recording-dot"></span>
+            <span>Listening...</span>
+          </div>
           <div class="gesture-choices">
-            <div class="choice" id="choice-trust">
-              <span class="icon">🖐️</span>
-              <p>Open Palm<br><small>Trust</small></p>
+            <div class="choice" id="choice-trust" onclick="sendMockGesture('trust')">
+              <span class="icon">👍</span>
+              <p>Trust<br><small>Tap to choose</small></p>
             </div>
-            <div class="choice" id="choice-run">
-              <span class="icon">🙅</span>
-              <p>Cross Arms<br><small>Run Away</small></p>
+            <div class="choice" id="choice-run" onclick="sendMockGesture('run_away')">
+              <span class="icon">🏃</span>
+              <p>Run Away<br><small>Tap to choose</small></p>
             </div>
           </div>
-          <p class="small">Show your gesture to the camera</p>
+          <p class="small">Or speak your choice aloud</p>
         </div>
       </div>
 

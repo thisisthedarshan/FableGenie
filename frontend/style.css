@@ -218,9 +218,26 @@ select:focus {
   left: 0;
   width: 100%;
   height: 100%;
-  background-size: cover;
-  background-position: center;
-  transition: background-image 2s ease-in-out;
+  overflow: hidden;
+  background: #0f111a;
+}
+
+/* Crossfade illustration layers */
+.illustration-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  opacity: 0;
+  transition: opacity 1.2s ease-in-out;
+  pointer-events: none;
+}
+
+.illustration-layer.active {
+  opacity: 1;
 }
 
 #video-container {
@@ -264,11 +281,17 @@ select:focus {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
   z-index: 10;
   display: flex;
   align-items: center;
   justify-content: center;
+  animation: fadeIn 0.5s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .gesture-choices {
@@ -303,6 +326,38 @@ select:focus {
 .small {
   font-size: 0.8rem;
   color: var(--text-secondary);
+}
+
+/* Recording indicator for voice branch */
+.recording-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  justify-content: center;
+  color: var(--accent-color);
+  font-size: 0.95rem;
+}
+
+.recording-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: pulse-dot 1.2s infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+.branch-voice-prompt {
+  font-family: 'Playfair Display', serif;
+  font-size: 1.3rem;
+  font-style: italic;
+  margin-bottom: 10px;
+  color: var(--text-primary);
 }
 
 #webcam-preview {
